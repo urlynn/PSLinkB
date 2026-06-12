@@ -1,0 +1,80 @@
+<%+header%>
+<h2 name="title"><%:PSLinkB%></h2>
+<script>(function(){var t=document.querySelector('h2[name="title"]');var m=document.getElementById('tabmenu');if(t&&m&&m.parentNode){m.parentNode.insertBefore(t,m)}})();</script>
+
+<style>
+.pslinkb-auth {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+}
+.pslinkb-auth .card {
+    text-align: center;
+    padding: 24px;
+}
+.pslinkb-auth .card h2 {
+    font-size: 15px;
+    margin: 0 0 16px 0;
+}
+.pslinkb-auth .card p {
+    font-size: 13px;
+    margin: 0 0 12px 0;
+    opacity: 0.6;
+}
+#qrcode {
+    display: inline-block;
+    margin: 8px 0;
+}
+</style>
+
+<div class="pslinkb-auth">
+  <div class="cbi-section card">
+    <h2 id="auth-title"><%:Scan QR to Login%></h2>
+    <p id="auth-desc"><%:Use Bilibili app to scan the QR code below%></p>
+    <div id="qrcode"></div>
+    <p style="font-size:12px;margin-top:12px" id="msg"><%:Scan QR to Login%></p>
+  </div>
+</div>
+
+<script>
+sessionStorage.setItem('_pslinkb_from_auth','1');
+var statusUrl='<%=luci.dispatcher.build_url("admin/services/pslinkb/status")%>';
+var api='<%=luci.dispatcher.build_url("admin/services/pslinkb/status-json")%>';
+var curQr='<%=qr_url%>';
+var isLoggedIn=<%=is_logged_in and 'true' or 'false'%>;
+var qrBox=document.getElementById('qrcode');
+var msgEl=document.getElementById('msg');
+if(isLoggedIn){
+  document.getElementById('auth-title').textContent='<%:Face Verification Required%>';
+  document.getElementById('auth-desc').textContent='<%:Scan QR to complete face verification%>';
+  msgEl.textContent='<%:Scan QR to verify%>';
+}
+L.require('uqr').then(function(UQR){
+  function draw(u){qrBox.innerHTML=UQR.renderSVG(u,{pixelSize:8});curQr=u}
+  draw('<%=qr_url%>');
+  (function poll(){
+    fetch(api).then(function(r){return r.json()}).then(function(d){
+      if(isLoggedIn){
+        if(!d.qr){
+          msgEl.textContent='<%:Verification complete, redirecting...%>';
+          sessionStorage.removeItem('_pslinkb_from_auth');
+          setTimeout(function(){location.href=statusUrl},600);
+          return;
+        }
+      } else {
+        if(d.user){
+          msgEl.textContent='<%:Logged in, redirecting...%>';
+          sessionStorage.removeItem('_pslinkb_from_auth');
+          setTimeout(function(){location.href=statusUrl},600);
+          return;
+        }
+      }
+      if(d.qr && d.qr!=curQr) draw(d.qr);
+      setTimeout(poll,1000);
+    }).catch(function(){setTimeout(poll,1000)});
+  })();
+});
+</script>
+
+<%+footer%>

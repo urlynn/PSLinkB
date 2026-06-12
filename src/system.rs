@@ -1,0 +1,354 @@
+//! 状态机：事件 -> 状态 -> 副作用
+
+use crate::config::Config;
+use crate::config::rtmp_url;
+use crate::core::effect::Effect;
+use crate::core::event::Event;
+use crate::core::error::start_live_error;
+use crate::actors::blive::LiveMode;
+use crate::log_warn;
+use crate::core::state::GlobalState;
+use tokio::sync::watch;
+
+/// 系统状态
+#[derive(Debug, Clone)]
+enum State {
+    /// 空闲
+    Idle,
+    /// PS5 推流中 — Manual 模式等待手动开播 | Auto 模式开播失败后暂存
+    Ps5Streaming,
+    /// PS5 已推流 - 开播 API 调用中
+    LivePreparing {
+        app: String,
+        stream_key: String,
+    },
+    /// 直播中 — FFmpeg 推流 + 弹幕运行中
+    Live {
+        app: String,
+        ps5_key: String,
+        bili_url: String,
+        bili_key: String,
+    },
+}
+
+/// FFmpeg 命令
+#[derive(Debug)]
+pub enum FfmpegCmd {
+    Start {
+        ps5_app: String,
+        ps5_stream_key: String,
+        bilibili_rtmp_url: String,
+        bilibili_stream_key: String,
+    },
+    Stop,
+}
+
+/// B站 API 命令
+#[derive(Debug)]
+pub enum BilibiliCmd {
+    StartLive {
+        room_id: u64,
+        area_v2: String,
+        title: Option<String>,
+    },
+    StopLive {
+        room_id: u64,
+    },
+}
+
+/// 弹幕命令
+#[derive(Debug)]
+pub enum DanmakuCmd {
+    Start { room_id: u64 },
+    Stop,
+}
+
+/// 系统状态机
+pub struct System {
+    state: State,
+    config: Config,
+    local_ip: String,
+    state_rx: watch::Receiver<GlobalState>,
+    notify_queue: Vec<String>,
+}
+
+impl System {
+    pub fn new(config: Config, state_rx: watch::Receiver<GlobalState>) -> Self {
+        Self {
+            state: State::Idle,
+            config,
+            local_ip: local_ip(),
+            state_rx,
+            notify_queue: Vec::new(),
+        }
+    }
+
+    /// 处理一个事件，返回需要执行的副作用列表 - 系统业务逻辑
+    pub fn handle(&mut self, event: Event) -> Vec<Effect> {
+        let mut effects = self.transition(event);
+        if !self.state_rx.borrow().channel_name.is_empty() {
+            for msg in self.notify_queue.drain(..) {
+                effects.push(Effect::NotifyPs5(msg));
+            }
+        }
+        effects
+    }
+
+    // ── 内部：状态转换逻辑 ──
+
+    fn transition(&mut self, event: Event) -> Vec<Effect> {
+        let current_state = self.state.clone();
+        match (&current_state, event) {
+            // ————————————————————————————————————————————
+            // PS5 开始推流
+            // ————————————————————————————————————————————
+            (State::Idle, Event::RtmpPublish { app, stream_key }) => {
+                let app_c = app.clone();
+                let key_c = stream_key.clone();
+                crate::luci::set("rtmp", &rtmp_url(&self.local_ip, &app, &stream_key));
+                let mut effects = Vec::new();
+
+                if self.config.room.live_mode == LiveMode::Auto {
+                    self.state = State::LivePreparing {
+                        app: app_c.clone(),
+                        stream_key: key_c.clone(),
+                    };
+                    effects.push(Effect::Log(format!(
+                        "PS5 streaming: {}",
+                        rtmp_url(&self.local_ip, &app, &stream_key)
+                    )));
+                    effects.push(Effect::BilibiliStartLive {
+                        room_id: self.config.room.room_id,
+                        area_v2: self.config.room.area_v2.clone(),
+                        title: self.title_param(),
+                    });
+                } else {
+                    self.state = State::Ps5Streaming;
+                    effects.push(Effect::Log(format!(
+                        "PS5 streaming: {}",
+                        rtmp_url(&self.local_ip, &app, &stream_key)
+                    )));
+                    if self.config.room.live_mode == LiveMode::Manual {
+                        effects.push(Effect::Log(format!(
+                            "[Manual] RTMP: rtmp://127.0.0.1:1935/{}/{}",
+                            app, stream_key
+                        )));
+                    }
+                }
+
+                effects
+            }
+
+            // ————————————————————————————————————————————
+            // PS5 停止推流 — 回到 Idle
+            // ————————————————————————————————————————————
+            (
+                State::Ps5Streaming
+                | State::LivePreparing { .. }
+                | State::Live { .. },
+                Event::RtmpUnpublish,
+            ) => {
+                crate::luci::clear("rtmp");
+                crate::luci::reset();
+                let was_live = matches!(
+                    self.state,
+                    State::LivePreparing { .. } | State::Live { .. }
+                );
+
+                self.state = State::Idle;
+                crate::luci::set("stream", "");
+
+                let mut effects = vec![
+                    Effect::StopFfmpeg,
+                    Effect::StopDanmaku,
+                    Effect::Log("PS5 stopped - cleaning up".into()),
+                ];
+
+                if was_live {
+                    effects.push(Effect::BilibiliStopLive {
+                        room_id: self.config.room.room_id,
+                    });
+                }
+
+                effects
+            }
+
+            // ————————————————————————————————————————————
+            // 开播成功 -> 进入直播，启动 FFmpeg + 弹幕
+            // ————————————————————————————————————————————
+            (
+                State::LivePreparing { app, stream_key },
+                Event::BilibiliLiveStarted {
+                    rtmp_url,
+                    stream_key: bilibili_key,
+                },
+            ) => {
+                self.state = State::Live {
+                    app: app.clone(),
+                    ps5_key: stream_key.clone(),
+                    bili_url: rtmp_url.clone(),
+                    bili_key: bilibili_key.clone(),
+                };
+
+                vec![
+                    Effect::StartFfmpeg {
+                        ps5_app: app.clone(),
+                        ps5_stream_key: stream_key.clone(),
+                        bilibili_rtmp_url: rtmp_url,
+                        bilibili_stream_key: bilibili_key,
+                    },
+                    Effect::StartDanmaku {
+                        room_id: self.config.room.room_id,
+                    },
+                ]
+            }
+
+            // ————————————————————————————————————————————
+            // B站需要人脸验证 -> 保持 LivePreparing，通知 PS5
+            // BLiveManager 会自动重试开播
+            // ————————————————————————————————————————————
+            (State::LivePreparing { .. }, Event::BilibiliAuthRequired { face_auth_url }) => {
+                self.notify_queue.push("需要人脸验证".into());
+                let mut effects = vec![
+                    Effect::Log("需人脸验证，正在等待...".into()),
+                ];
+                if let Some(url) = face_auth_url {
+                    effects.push(Effect::Log(format!("验证链接: {}", url)));
+                }
+                effects
+            }
+
+            // ————————————————————————————————————————————
+            // B站开播失败 -> 退回 Ps5Streaming，通知 PS5
+            // ————————————————————————————————————————————
+            (
+                State::LivePreparing { .. },
+                Event::BilibiliLiveStartFailed { code, message },
+            ) => {
+                self.state = State::Ps5Streaming;
+
+                self.notify_queue.push(format!("开播失败({}): {}", code, start_live_error(code, &message)));
+                vec![
+                    Effect::Log(format!(
+                        "StartLive failed ({}): {}",
+                        code, message
+                    )),
+                ]
+            }
+
+            // ————————————————————————————————————————————
+            // 弹幕连接成功 -> 进入 PS5 通知队列
+            // ————————————————————————————————————————————
+            (_, Event::DanmakuReady) => {
+                self.notify_queue.push("弹幕已连接".into());
+                vec![]
+            }
+
+            // ————————————————————————————————————————————
+            // PS5 IRC 就绪 —> 触发通知队列 drain
+            // ————————————————————————————————————————————
+            (_, Event::Ps5IrcReady { .. }) => {
+                vec![]
+            }
+
+            // ————————————————————————————————————————————
+            // B站关播结果 — 仅日志
+            // ————————————————————————————————————————————
+            (_, Event::BilibiliLiveStopped) => {
+                vec![Effect::Log("StopLive OK".into())]
+            }
+            (_, Event::BilibiliLiveStopFailed { code, message }) => {
+                vec![Effect::Log(format!("StopLive failed ({}): {}", code, message))]
+            }
+
+            // ————————————————————————————————————————————
+            // 直播流状态确认/超时
+            // ————————————————————————————————————————————
+            (_, Event::BilibiliStreamConfirmed { .. }) => {
+                eprintln!("[Bili:Live] Live stream confirmed - 直播视频流验证成功");
+                self.notify_queue.push("开播成功".into());
+                vec![]
+            }
+            (State::Live { app, ps5_key, bili_url, bili_key }, Event::BilibiliStreamTimeout { .. }) => {
+                log_warn!("Bili:Live: Live stream unconfirmed - FFmpeg restream");
+                self.notify_queue.push("推流重试".into());
+                vec![
+                    Effect::StopFfmpeg,
+                    Effect::StartFfmpeg {
+                        ps5_app: app.clone(),
+                        ps5_stream_key: ps5_key.clone(),
+                        bilibili_rtmp_url: bili_url.clone(),
+                        bilibili_stream_key: bili_key.clone(),
+                    },
+                ]
+            }
+
+            // ————————————————————————————————————————————
+            // FFmpeg 错误 — 推流中断，回到 Idle
+            // ————————————————————————————————————————————
+            (_, Event::FfmpegError(msg)) => {
+                self.state = State::Idle;
+                crate::luci::set("stream", "");
+                self.notify_queue.push(format!("推流中断: {}", msg));
+                vec![
+                    Effect::Log(format!("FFmpeg: {}", msg)),
+                ]
+            }
+
+            // ————————————————————————————————————————————
+            // 系统关闭 — 清理所有服务 + 关播
+            // ————————————————————————————————————————————
+            (_, Event::Shutdown) => {
+                let was_live = matches!(
+                    self.state,
+                    State::LivePreparing { .. } | State::Live { .. }
+                );
+
+                self.state = State::Idle;
+                crate::luci::set("stream", "");
+
+                let mut effects = vec![
+                    Effect::StopFfmpeg,
+                    Effect::StopDanmaku,
+                    Effect::Log("Shutdown".into()),
+                ];
+
+                if was_live {
+                    effects.push(Effect::BilibiliStopLive {
+                        room_id: self.config.room.room_id,
+                    });
+                }
+
+                effects
+            }
+            // 无效转换 — 静默忽略
+            _ => Vec::new(),
+        }
+    }
+
+    /// 辅助：生成开播 title 参数
+    fn title_param(&self) -> Option<String> {
+        if self.config.room.title.is_empty() {
+            None
+        } else {
+            Some(self.config.room.title.clone())
+        }
+    }
+}
+
+/// 理论上要支持所有的 LAN 口 IP 但我用的是 192.168.1.1
+/// 先自己用着 标记为 Todo
+fn local_ip() -> String {
+    if let Ok(s) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if s.connect("192.168.1.1:80").is_ok() {
+            if let Ok(a) = s.local_addr() {
+                let ip = a.ip().to_string();
+                if ip != "0.0.0.0" { return ip; }
+            }
+        }
+    }
+    // Falback: 默认路由 - Openwrt 用这个获取的是 WAN 口 IP
+    std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| { s.connect("8.8.8.8:80")?; s.local_addr().map(|a| a.ip().to_string()) })
+        .unwrap_or_else(|_| "127.0.0.1".to_string())
+}

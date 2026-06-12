@@ -1,0 +1,529 @@
+<%+header%>
+<h2 name="title"><%:PSLinkB%></h2>
+<script>(function(){var t=document.querySelector('h2[name="title"]');var m=document.getElementById('tabmenu');if(t&&m&&m.parentNode){m.parentNode.insertBefore(t,m)}})();</script>
+
+<style>
+.pslinkb {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%; max-width: 100%;
+  box-sizing: border-box;
+}
+.pslinkb *,.pslinkb *::before,.pslinkb *::after{box-sizing:border-box}
+
+.pslinkb .ps-card {
+  padding: 14px 16px !important;
+  margin: 0 !important;
+  border: 0 !important;
+}
+.pslinkb .ps-subcard {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px !important;
+  gap: 0;
+  margin: 0 !important;
+  border: 0 !important;
+}
+
+.pslinkb .dual-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  border-radius: inherit;
+}
+.pslinkb .status-item {
+  background: rgba(128,128,128,0.06);
+  border: 1px solid rgba(128,128,128,0.10);
+  border-radius: inherit;
+  padding: 16px 18px;
+  text-align: center;
+}
+.pslinkb .status-item .si-name {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 500;
+}
+.pslinkb .status-item .si-state {
+  font-size: 13px;
+  font-weight: 600;
+  color: #2dce89;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.pslinkb .status-item .si-state::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2dce89;
+  flex-shrink: 0;
+}
+.pslinkb .status-item.stopped .si-state {
+  color: #f5365c;
+  opacity: 0.8;
+}
+.pslinkb .status-item.stopped .si-state::before {
+  background: #f5365c;
+  opacity: 0.8;
+}
+.pslinkb .status-item.waiting .si-state {
+  color: #fb6340;
+}
+.pslinkb .status-item.waiting .si-state::before {
+  background: #fb6340;
+  animation: pslinkb-pulse 1.2s ease-in-out infinite;
+}
+.pslinkb .status-item.checking .si-state {
+  color: #5e72e4;
+}
+.pslinkb .status-item.checking .si-state::before {
+  background: #5e72e4;
+  animation: pslinkb-pulse 0.8s ease-in-out infinite;
+}
+
+.pslinkb .control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  border-radius: inherit;
+}
+.pslinkb .dns-label {
+  font-size: 14px;
+  font-weight: 600;
+  display: inline-block;
+  min-width: 56px;
+  text-align: right;
+}
+.pslinkb .dns-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  border-radius: inherit;
+}
+.pslinkb .status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: rgba(128,128,128,0.10);
+  border: 1px solid rgba(128,128,128,0.18);
+}
+.pslinkb .status-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(128,128,128,0.5);
+}
+.pslinkb .status-pill.running {
+  color: #2dce89;
+  border-color: rgba(45,206,137,0.2);
+  background: rgba(45,206,137,0.08);
+}
+.pslinkb .status-pill.running::before {
+  background: #2dce89;
+}
+.pslinkb .status-pill.stopped {
+  color: #f5365c;
+  border-color: rgba(245,54,92,0.2);
+  background: rgba(245,54,92,0.08);
+}
+.pslinkb .status-pill.stopped::before {
+  background: #f5365c;
+}
+
+.pslinkb .control-bar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(128,128,128,0.12);
+}
+.pslinkb .control-bar .err-msg {
+  margin-right: auto;
+}
+.pslinkb .control-bar.control-bar-left {
+  justify-content: flex-start;
+}
+
+.pslinkb .card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  border-radius: inherit;
+}
+
+.pslinkb .card-title {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pslinkb .card-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+.pslinkb .live-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  flex-shrink: 0;
+  animation: pslinkb-pulse 2s ease-in-out infinite;
+}
+@keyframes pslinkb-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.pslinkb .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pslinkb .badge-success { color: #2dce89; background: rgba(45,206,137,0.1); }
+.pslinkb .badge-warning { color: #fb6340; background: rgba(251,99,64,0.1); }
+.pslinkb .badge-info    { color: #5e72e4; background: rgba(94,114,228,0.1); }
+.pslinkb .badge-error   { color: #f5365c; background: rgba(245,54,92,0.1); }
+.pslinkb .badge-muted   { color: #8898aa; background: rgba(128,128,128,0.12); }
+
+.pslinkb .toggle-group { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.pslinkb .toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; cursor: pointer; flex-shrink: 0; }
+.pslinkb .toggle-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.pslinkb .toggle-slider {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  background-color: rgba(128,128,128,0.35);
+  transition: background 0.25s ease;
+  border-radius: 24px;
+}
+.pslinkb .toggle-slider::before {
+  content: "";
+  position: absolute;
+  height: 18px; width: 18px;
+  left: 3px; top: 3px;
+  background: #fff;
+  transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.pslinkb .toggle-switch input:checked + .toggle-slider {
+  background-color: #2dce89;
+}
+.pslinkb .toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+}
+
+.pslinkb .toggle-switch.processing .toggle-slider {
+  background-color: #fb6340 !important;
+  animation: pulse 0.8s ease-in-out infinite;
+}
+.pslinkb .toggle-switch.processing input:checked + .toggle-slider {
+  background-color: #2dce89 !important;
+  animation: pulse 0.8s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.pslinkb .status-pill.ps-processing { background: rgba(128,128,128,0.12); border-color: rgba(128,128,128,0.25); color: #8898aa; }
+
+.pslinkb .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px; height: 32px;
+  border: 1px solid rgba(128,128,128,0.2);
+  border-radius: 8px;
+  background: rgba(128,128,128,0.06);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.pslinkb .icon-btn:hover { border-color: rgba(128,128,128,0.35); }
+.pslinkb .icon-btn:active { transform: scale(0.95); }
+.pslinkb .icon-btn svg { width: 15px; height: 15px; opacity: 0.5; }
+
+.pslinkb .err-msg {
+  display: none;
+  font-size: 12px;
+  color: #f5365c;
+  flex: 1;
+  min-width: 0;
+}
+.pslinkb .icon-btn:hover svg { opacity: 0.8; }
+
+.pslinkb .domain-list {
+  font-size: 12px;
+  opacity: 0.5;
+  height: 32px;
+  display: flex;
+  align-items: center;
+}
+
+.pslinkb .dns-detail {
+  flex: 1;
+  font-size: 11px;
+  padding: 4px 0 0 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.pslinkb .dns-dot {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.pslinkb .dns-dot.ok { color: #2dce89; }
+.pslinkb .dns-dot.fail { color: #f5365c; }
+.pslinkb .dns-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid;
+  font-family: "JetBrains Mono", monospace;
+}
+.pslinkb .dns-pill.ok {
+  color: #2dce89;
+  border-color: rgba(45,206,137,0.25);
+  background: rgba(45,206,137,0.06);
+}
+.pslinkb .dns-pill.fail {
+  color: #f5365c;
+  border-color: rgba(245,54,92,0.25);
+  background: rgba(245,54,92,0.06);
+}
+.pslinkb .dns-arrow {
+  opacity: 0.3;
+  margin: 0 2px;
+}
+.pslinkb .dns-ip {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+}
+.pslinkb .dns-ip.ok { color: #2dce89; }
+.pslinkb .dns-ip.fail { color: #f5365c; }
+.pslinkb .dns-ip.muted { color: #8898aa; opacity: 0.8; }
+
+@media (max-width: 640px) {
+  .pslinkb { grid-template-columns: 1fr; gap: 8px; }
+  .pslinkb .ps-card { padding: 10px 12px !important; }
+  .pslinkb .card-title { font-size: 13px; }
+  .pslinkb .badge { font-size: 11px; padding: 1px 8px; }
+  .pslinkb .icon-btn { width: 28px; height: 28px; }
+  .pslinkb .icon-btn svg { width: 13px; height: 13px; }
+  .pslinkb .si-state { font-size: 13px; }
+}
+</style>
+
+<%
+local function read(p) return luci.sys.exec("cat /tmp/pslinkb/"..p.." 2>/dev/null"):match("^(%S+)") or "" end
+local state=read("state"); local user=read("user"); local qr=read("qr_url"); local rtmp=read("rtmp"); local stream=read("stream"); local err=luci.sys.exec("cat /tmp/pslinkb/error 2>/dev/null"):match("^(.-)%s*$") or ""
+local running=(luci.sys.call("pidof pslinkb >/dev/null")==0)
+local streaming=(luci.sys.call("pidof pslinkb-stream >/dev/null")==0)
+local str_map={live={cls='',txt=translate('Available')},fake={cls='waiting',txt=translate('Pending')},probing={cls='checking',txt=translate('Checking')},timeout={cls='stopped',txt=translate('Stream timeout')}}
+local str_display=str_map[stream] or {cls='stopped',txt=translate('Idle')}
+local function rf(p) local f=io.open("/tmp/pslinkb/"..p,"r");if f then local v=f:read("*a"):match("^(.-)%s*$");f:close();return v or "" end;return "" end
+local source=rf("source-ip"); local target=rf("target-ip"); local isequal=rf("isequal")
+local dns_on=(target~="")  -- for poll speed only, NOT pill logic
+local dns_ok=(isequal=="1")
+local dns_closed=(isequal=="2")
+if running and source=="" and isequal=="" then dns_ok=true end
+local dns_checking=(source~="" and not dns_ok and not dns_closed)
+local live_mode=luci.sys.exec("uci get pslinkb.@live[0].mode 2>/dev/null"):match("^(%S+)") or "auto"
+local push_url=""
+if live_mode=="manual" then
+  local stream_key=luci.sys.exec("uci get pslinkb.@live[0].stream_key 2>/dev/null"):match("^(%S+)") or ""
+  local router_ip=luci.sys.exec("uci get network.lan.ipaddr 2>/dev/null"):match("^(%S+)") or "192.168.1.1"
+  if stream_key~="" then push_url="rtmp://"..router_ip..":1935/live/"..stream_key end
+end
+%>
+
+<script>
+function toggleSvc(c){
+  if(c.checked && '<%=user%>'==''){
+    fetch('<%=luci.dispatcher.build_url("admin/services/pslinkb/ctl_start")%>',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'token=<%=token%>'});
+  return}
+  // 同步 DNS
+  var sw=c.parentElement;sw.classList.add('processing');
+  var dc=document.querySelector('.js-dns-switch');
+  var svcUrl=c.checked?'<%=luci.dispatcher.build_url("admin/services/pslinkb/ctl_start")%>':'<%=luci.dispatcher.build_url("admin/services/pslinkb/ctl_stop")%>';
+  function doSvc(){fetch(svcUrl,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'token=<%=token%>'}).finally(function(){sw.classList.remove('processing')})}
+  dc.checked=c.checked;toggleDns(dc).finally(doSvc)
+}
+// DNS toggle
+function toggleDns(c){
+  var on=c.checked;
+  var sw=c.parentElement;
+  var pill=document.querySelector('.js-dns-pill');
+  var ipEl=document.querySelector('.js-dns-ip');
+  if(sw)sw.classList.add('processing');
+  if(pill){pill.textContent=on?'检测中...':'关闭中...';pill.classList.remove('running','stopped','ps-processing');pill.classList.add('ps-processing')}
+  // ON: dns-peek then redirect_on
+  if(on&&ipEl){
+    ipEl.style.visibility='visible';
+    ipEl.innerHTML='<span class="dns-dot fail">&#10007;</span> <span class="dns-ip fail">?</span> <span style="opacity:0.3;margin:0 4px">&#8594;</span> <span class="dns-ip muted"><%=target%></span>';
+    return fetch('/cgi-bin/luci/admin/services/pslinkb/dns-peek').then(function(r){return r.json()}).then(function(p){
+      if(ipEl)ipEl.innerHTML='<span class="dns-dot fail">&#10007;</span> <span class="dns-ip fail">'+(p.source||'?')+'</span> <span style="opacity:0.3;margin:0 4px">&#8594;</span> <span class="dns-ip muted">'+(p.target||'?')+'</span>';
+      return fetch('/cgi-bin/luci/admin/services/pslinkb/redirect_on',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'token=<%=token%>'});
+    }).then(function(r){return r.json()}).then(function(d){
+      if(sw)sw.classList.remove('processing');
+      if(pill){pill.classList.remove('running','stopped','ps-processing');pill.classList.add('running');pill.textContent='<%:Active%>'}
+      if(ipEl)ipEl.innerHTML='<span class="dns-dot ok">&#10003;</span> <span class="dns-ip ok">'+d.target+'</span>';
+    }).catch(function(){if(sw)sw.classList.remove('processing')});
+  }
+  // OFF: redirect_off
+  if(!on&&ipEl){ipEl.style.visibility='visible';ipEl.innerHTML='<span style="opacity:0.5;font-size:13px">正在重启 Dnsmasq...</span>'}
+  var u=on?'/cgi-bin/luci/admin/services/pslinkb/redirect_on':'/cgi-bin/luci/admin/services/pslinkb/redirect_off';
+  return fetch(u,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'token=<%=token%>'}).then(function(r){return r.json()}).then(function(d){
+    if(sw)sw.classList.remove('processing');
+    if(pill){pill.classList.remove('running','stopped','ps-processing');
+      if(d.isequal=="1"){pill.textContent='<%:Active%>';pill.classList.add('running')}
+      else if(d.isequal=="2"){pill.textContent='<%:Inactive%>';pill.classList.add('stopped')}
+      else{pill.classList.add('stopped')}}
+    if(ipEl&&d.source!==undefined){ipEl.style.visibility='visible';
+      if(d.isequal=="1")ipEl.innerHTML='<span class="dns-dot ok">&#10003;</span> <span class="dns-ip ok">'+d.target+'</span>';
+      else if(d.isequal=="2"){
+        if(ipEl)ipEl.innerHTML='<span style="opacity:0.5;font-size:13px">关闭成功!</span>';
+        setTimeout(function(){if(ipEl)ipEl.innerHTML=''},1000);
+      }
+      else ipEl.innerHTML='<span class="dns-dot fail">&#10007;</span> <span class="dns-ip fail">'+(d.source||'?')+'</span> <span style="opacity:0.3;margin:0 4px">&#8594;</span> <span class="dns-ip muted">'+(d.target||'?')+'</span>';}
+  }).catch(function(){
+    if(sw)sw.classList.remove('processing');
+    if(pill){pill.textContent='错误';pill.classList.remove('running','stopped','ps-processing');pill.classList.add('stopped')}
+  });
+}
+
+// DNS pill click -> toggle switch
+(function(){var dp=document.querySelector('.js-dns-pill');if(dp){dp.style.cursor='pointer';dp.addEventListener('click',function(){var cb=document.querySelector('.js-dns-switch');if(cb){cb.checked=!cb.checked;toggleDns(cb)}})}})();
+
+function post(u){var f=document.createElement('form');f.method='POST';f.action=u;var t=document.createElement('input');t.type='hidden';t.name='token';t.value='<%=token%>';f.appendChild(t);document.body.appendChild(f);f.submit()}
+  var url='<%=luci.dispatcher.build_url("admin/services/pslinkb/status-json")%>';
+  function updateUI(d){
+    document.querySelectorAll('.js-svc').forEach(function(el){el.className='status-item js-svc '+(d.running?'':'stopped')});
+    document.querySelectorAll('.js-svc-state').forEach(function(el){el.textContent=d.running?'<%:Running%>':'<%:Stopped%>'});
+    var str=d.stream||'';
+    var strMap={live:{cls:'',txt:'<%:Available%>'},fake:{cls:'waiting',txt:'<%:Pending%>'},probing:{cls:'checking',txt:'<%:Checking%>'},timeout:{cls:'stopped',txt:'<%:Stream timeout%>'}};
+    var si=strMap[str]||{cls:'stopped',txt:'<%:Idle%>'};
+    document.querySelectorAll('.js-str').forEach(function(el){el.className='status-item js-str '+si.cls});
+    document.querySelectorAll('.js-str-state').forEach(function(el){el.textContent=si.txt});
+    var userEl=document.querySelector('.js-user');
+    if(userEl){userEl.textContent=d.user||'<%:Not logged in%>';userEl.className='badge js-user '+(d.user?'badge-success':'badge-error')}
+    var streamEl=document.querySelector('.js-stream-badge');
+    if(streamEl){var st=d.stream||'',cl='badge-muted',txt='<%:Unknown%>';
+      if(st=='live'){cl='badge-success';txt='<%:Available%>'}else if(st=='fake'){cl='badge-warning';txt='<%:Pending%>'}else if(st=='probing'){cl='badge-info';txt='<%:Checking%>'}else if(st=='timeout'){cl='badge-error';txt='<%:Stream timeout%>'}else{txt='<%:Idle%>'}
+      streamEl.className='badge js-stream-badge '+cl;streamEl.textContent=txt}
+    var errEl=document.querySelector('.js-err');
+    if(errEl){errEl.style.display=d.error?'inline-block':'none';errEl.textContent=d.error||''}
+    if(d.running&&d.qr&&sessionStorage.getItem('_pslinkb_from_auth')!=='1'){location.href='<%=luci.dispatcher.build_url("admin/services/pslinkb/auth")%>'}
+    if(!d.qr) sessionStorage.removeItem('_pslinkb_from_auth');
+  }
+  fetch(url+'?_='+Date.now()).then(function(r){return r.json()}).then(updateUI).catch(function(){});
+  L.Request.poll.add(3,url,{},function(res,data){if(res&&res.ok&&data)updateUI(data)});
+
+</script>
+
+<div class="pslinkb">
+
+  <!-- === Row 1: Service + DNS === -->
+  <div class="cbi-section ps-subcard">
+    <div class="dual-row">
+      <div class="status-item js-svc <%=running and '' or 'stopped'%>">
+        <div class="si-name">PSLinkB</div>
+        <div class="si-state js-svc-state"><%=running and translate('Running') or translate('Stopped')%></div>
+      </div>
+      <div class="status-item js-str <%=str_display.cls%>">
+        <div class="si-name">Stream</div>
+        <div class="si-state js-str-state"><%=str_display.txt%></div>
+      </div>
+    </div>
+    <div class="control-bar">
+      <span class="err-msg js-err" style="<%=err~='' and 'display:inline-block' or ''%>"><%=err%></span>
+      <label class="toggle-switch"><input type="checkbox" onchange="toggleSvc(this)" <%=running and 'checked' or ''%>><span class="toggle-slider"></span></label>
+      <button class="icon-btn" title="<%:Restart%>" onclick="post('<%=luci.dispatcher.build_url("admin/services/pslinkb/ctl_restart")%>')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21.5 2v6h-6"/><path d="M2.5 22v-6h6"/><path d="M2 11.5a10 10 0 0 1 18.8-4.3"/><path d="M22 12.5a10 10 0 0 1-18.8 4.2"/></svg></button>
+    </div>
+  </div>
+
+  <div class="cbi-section ps-subcard">
+    <div class="control-row">
+      <div class="dns-label-row">
+        <span class="dns-label"><%:DNS Redirect%></span>
+        <span class="status-pill js-dns-pill <%=dns_ok and 'running' or (dns_closed and 'stopped' or dns_checking and 'ps-processing' or 'stopped')%>"><%=dns_ok and translate('Active') or (dns_closed and translate('Inactive') or dns_checking and translate('Checking') or translate('Inactive'))%></span>
+      </div>
+      <div class="toggle-group">
+        <label class="toggle-switch"><input type="checkbox" class="js-dns-switch" onclick="toggleDns(this)" <%=dns_ok and 'checked' or ''%>><span class="toggle-slider"></span></label>
+      </div>
+    </div>
+    <div class="dns-detail js-dns-ip" style="min-height:22px">
+      <% if dns_ok then %>
+        <span class="dns-dot ok">&#10003;</span> <span class="dns-ip ok"><%=target%></span>
+      <% elseif source~='' then %>
+        <span class="dns-dot fail">&#10007;</span> <span class="dns-ip fail"><%=source%></span> <span style="opacity:0.3;margin:0 4px">&#8594;</span> <span class="dns-ip muted"><%=target%></span>
+      <% end %>
+    </div>
+    <div class="control-bar control-bar-left">
+      <div class="domain-list">live-video.net · tmi.twitch.tv · irc.twitch.tv · live.twitch.tv</div>
+    </div>
+  </div>
+
+  <!-- === Row 2: Login + Live  === -->
+  <div class="cbi-section ps-card">
+    <div class="card-row">
+      <span class="card-title"><%:Login%></span>
+      <span class="badge js-user <%=user~='' and 'badge-success' or 'badge-error'%>"><%=user~='' and user or translate('Not logged in')%></span>
+    </div>
+  </div>
+
+  <div class="cbi-section ps-card">
+    <div class="card-row">
+      <span class="card-title"><%:Live Status%></span>
+      <% local sb_map={live='badge-success',fake='badge-warning',probing='badge-info',timeout='badge-error'}; local sb=sb_map[stream] or 'badge-muted' %>
+      <span class="badge js-stream-badge <%=sb%>"><%=str_display.txt%></span>
+    </div>
+  </div>
+
+  <% if live_mode=="manual" and push_url~="" then %>
+  <div class="cbi-section ps-subcard" style="padding:12px 16px!important">
+    <div style="font-size:12px;color:#8898aa;margin-bottom:4px"><%:Push URL%></div>
+    <code style="font-size:13px;word-break:break-all;color:#32325d;background:#f6f9fc;padding:6px 10px;border-radius:4px;display:block"><%=push_url%></code>
+  </div>
+  <% end %>
+
+
+</div>
+
+<%+footer%>
