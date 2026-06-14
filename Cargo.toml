@@ -1,6 +1,6 @@
 [package]
 name = "pslinkb"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 description = "PS5 to Bilibili Live Streaming Bridge"
 license = "Apache-2.0 OR MIT"
@@ -64,7 +64,7 @@ strip = true
 
 # ==================== Features ====================
 [features]
-default = ["channel-mpsc", "cli"]
+default = ["cli"]
 # CLI + Config (clap,toml,qrcode,image,url 的快捷分组)
 cli = ["clap", "toml", "qrcode", "image", "url"]
 # 弹幕通道模式（二选一，互斥）

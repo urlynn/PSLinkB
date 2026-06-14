@@ -3,9 +3,11 @@
 use async_trait::async_trait;
 use blivemsg::types::Message;
 
-// 编译时检查：channel-mpsc 和 channel-broadcast 互斥
+// 编译时检查：必须启用且仅启用一个 channel
 #[cfg(all(feature = "channel-mpsc", feature = "channel-broadcast"))]
 compile_error!("channel-mpsc and channel-broadcast are mutually exclusive. Enable only one.");
+#[cfg(not(any(feature = "channel-mpsc", feature = "channel-broadcast")))]
+compile_error!("Must enable one of: channel-mpsc, channel-broadcast");
 
 /// 弹幕通道消息 — 弹幕和通知共用一条管道
 #[derive(Debug, Clone)]

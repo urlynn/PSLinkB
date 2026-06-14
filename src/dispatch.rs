@@ -66,5 +66,10 @@ pub async fn dispatch(
         Effect::Log(msg) => {
             eprintln!("[System] {}", msg);
         }
+        Effect::Restart => {
+            eprintln!("[System] Cookie 失效，2秒后重启...");
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            std::process::exit(0);
+        }
     }
 }

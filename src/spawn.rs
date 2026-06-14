@@ -114,14 +114,13 @@ pub fn spawn_ffmpeg_worker(mut cmd_rx: mpsc::Receiver<crate::system::FfmpegCmd>,
 pub fn spawn_bilibili_worker(
     mut cmd_rx: mpsc::Receiver<crate::system::BilibiliCmd>,
     event_tx: mpsc::Sender<Event>,
-    cm: std::sync::Arc<std::sync::Mutex<crate::core::auth::CookieManager>>,
+    cookie_string: String,
 ) {
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     tokio::spawn(async move {
         while let Some(cmd) = cmd_rx.recv().await {
-            // TODO: 重构后改为 get_cookie_string (auth 独立进程后无竞态)
-            let cookie_c = cm.lock().unwrap().reload_cookie().unwrap_or_default();
+            let cookie_c = cookie_string.clone();
             let event_tx_c = event_tx.clone();
             let cancel_c = cancel.clone();
 
@@ -133,7 +132,6 @@ pub fn spawn_bilibili_worker(
                         title,
                     } => {
                         cancel_c.store(false, std::sync::atomic::Ordering::Relaxed);
-                        eprintln!("[DEBUG] cookie len={}, start: {:.80}", cookie_c.len(), cookie_c);
                         execute_start_live(room_id, area_v2, title, cookie_c, event_tx_c, cancel_c).await;
                     }
                     crate::system::BilibiliCmd::StopLive { room_id } => {

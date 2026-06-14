@@ -41,4 +41,8 @@ pub enum Effect {
     // ── 日志输出 ──
     /// 日志（终端输出）
     Log(String),
+
+    // ── 系统控制 ──
+    /// 通知后重启 - Cookie 失效时
+    Restart,
 }

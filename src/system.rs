@@ -28,6 +28,7 @@ enum State {
         ps5_key: String,
         bili_url: String,
         bili_key: String,
+        retried: bool,
     },
 }
 
@@ -154,22 +155,8 @@ impl System {
                     self.state,
                     State::LivePreparing { .. } | State::Live { .. }
                 );
-
-                self.state = State::Idle;
-                crate::luci::set("stream", "");
-
-                let mut effects = vec![
-                    Effect::StopFfmpeg,
-                    Effect::StopDanmaku,
-                    Effect::Log("PS5 stopped - cleaning up".into()),
-                ];
-
-                if was_live {
-                    effects.push(Effect::BilibiliStopLive {
-                        room_id: self.config.room.room_id,
-                    });
-                }
-
+                let mut effects = self.cleanup(was_live);
+                effects.push(Effect::Log("PS5 stopped - cleaning up".into()));
                 effects
             }
 
@@ -188,6 +175,7 @@ impl System {
                     ps5_key: stream_key.clone(),
                     bili_url: rtmp_url.clone(),
                     bili_key: bilibili_key.clone(),
+                    retried: false,
                 };
 
                 vec![
@@ -220,20 +208,23 @@ impl System {
 
             // ————————————————————————————————————————————
             // B站开播失败 -> 退回 Ps5Streaming，通知 PS5
+            // -101: cookie 失效 -> 通知 PS5 后重启
             // ————————————————————————————————————————————
             (
                 State::LivePreparing { .. },
                 Event::BilibiliLiveStartFailed { code, message },
             ) => {
-                self.state = State::Ps5Streaming;
+                let mut effects = vec![Effect::Log(format!("StartLive failed ({}): {}", code, message))];
 
-                self.notify_queue.push(format!("开播失败({}): {}", code, start_live_error(code, &message)));
-                vec![
-                    Effect::Log(format!(
-                        "StartLive failed ({}): {}",
-                        code, message
-                    )),
-                ]
+                if code == -101 {
+                    self.state = State::Idle;
+                    effects.push(Effect::NotifyPs5("登录已过期，请重新扫码".into()));
+                    effects.push(Effect::Restart);
+                } else {
+                    self.state = State::Ps5Streaming;
+                    self.notify_queue.push(format!("开播失败({}): {}", code, start_live_error(code, &message)));
+                }
+                effects
             }
 
             // ————————————————————————————————————————————
@@ -265,12 +256,16 @@ impl System {
             // 直播流状态确认/超时
             // ————————————————————————————————————————————
             (_, Event::BilibiliStreamConfirmed { .. }) => {
-                eprintln!("[Bili:Live] Live stream confirmed - 直播视频流验证成功");
                 self.notify_queue.push("开播成功".into());
                 vec![]
             }
-            (State::Live { app, ps5_key, bili_url, bili_key }, Event::BilibiliStreamTimeout { .. }) => {
+            (State::Live { app, ps5_key, bili_url, bili_key, retried: false }, Event::BilibiliStreamTimeout { .. }) => {
                 log_warn!("Bili:Live: Live stream unconfirmed - FFmpeg restream");
+                self.state = State::Live {
+                    app: app.clone(), ps5_key: ps5_key.clone(),
+                    bili_url: bili_url.clone(), bili_key: bili_key.clone(),
+                    retried: true,
+                };
                 self.notify_queue.push("推流重试".into());
                 vec![
                     Effect::StopFfmpeg,
@@ -282,17 +277,50 @@ impl System {
                     },
                 ]
             }
+            // timeout when already retried -> fall through to cleanup
+            (State::Live { .. }, Event::BilibiliStreamTimeout { .. }) => {
+                let mut effects = self.cleanup(true);
+                effects.push(Effect::Log("Stream unconfirmed after retry".into()));
+                effects
+            }
 
             // ————————————————————————————————————————————
-            // FFmpeg 错误 — 推流中断，回到 Idle
+            // FFmpeg 错误 — system 层统一重试一次
             // ————————————————————————————————————————————
-            (_, Event::FfmpegError(msg)) => {
-                self.state = State::Idle;
-                crate::luci::set("stream", "");
-                self.notify_queue.push(format!("推流中断: {}", msg));
+            (State::Live { app, ps5_key, bili_url, bili_key, retried: false }, Event::FfmpegError(status)) => {
+                self.state = State::Live {
+                    app: app.clone(), ps5_key: ps5_key.clone(),
+                    bili_url: bili_url.clone(), bili_key: bili_key.clone(),
+                    retried: true,
+                };
+                self.notify_queue.push("推流重试".into());
                 vec![
-                    Effect::Log(format!("FFmpeg: {}", msg)),
+                    Effect::StopFfmpeg,
+                    Effect::StartFfmpeg {
+                        ps5_app: app.clone(),
+                        ps5_stream_key: ps5_key.clone(),
+                        bilibili_rtmp_url: bili_url.clone(),
+                        bilibili_stream_key: bili_key.clone(),
+                    },
+                    Effect::Log(format!("FFmpeg: {}", status.message())),
                 ]
+            }
+            // already retried -> give up
+            (State::Live { .. }, Event::FfmpegError(status)) => {
+                let msg = status.message();
+                let mut effects = self.cleanup(true);
+                effects.push(Effect::Log(format!("FFmpeg: {}", msg)));
+                self.notify_queue.push(format!("推流失败: {}", msg));
+                effects
+            }
+            // non-Live states (e.g. LivePreparing) -> cleanup directly
+            (_, Event::FfmpegError(status)) => {
+                let msg = status.message();
+                let was_live = matches!(self.state, State::LivePreparing { .. } | State::Live { .. });
+                let mut effects = self.cleanup(was_live);
+                effects.push(Effect::Log(format!("FFmpeg: {}", msg)));
+                self.notify_queue.push(format!("推流失败: {}", msg));
+                effects
             }
 
             // ————————————————————————————————————————————
@@ -303,22 +331,8 @@ impl System {
                     self.state,
                     State::LivePreparing { .. } | State::Live { .. }
                 );
-
-                self.state = State::Idle;
-                crate::luci::set("stream", "");
-
-                let mut effects = vec![
-                    Effect::StopFfmpeg,
-                    Effect::StopDanmaku,
-                    Effect::Log("Shutdown".into()),
-                ];
-
-                if was_live {
-                    effects.push(Effect::BilibiliStopLive {
-                        room_id: self.config.room.room_id,
-                    });
-                }
-
+                let mut effects = self.cleanup(was_live);
+                effects.push(Effect::Log("Shutdown".into()));
                 effects
             }
             // 无效转换 — 静默忽略
@@ -333,6 +347,22 @@ impl System {
         } else {
             Some(self.config.room.title.clone())
         }
+    }
+
+    /// 关播清理：state->Idle, luci, StopFfmpeg, StopDanmaku, BilibiliStopLive
+    fn cleanup(&mut self, was_live: bool) -> Vec<Effect> {
+        self.state = State::Idle;
+        crate::luci::set("stream", "");
+        let mut effects = vec![
+            Effect::StopFfmpeg,
+            Effect::StopDanmaku,
+        ];
+        if was_live {
+            effects.push(Effect::BilibiliStopLive {
+                room_id: self.config.room.room_id,
+            });
+        }
+        effects
     }
 }
 

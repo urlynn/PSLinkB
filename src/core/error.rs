@@ -2,6 +2,7 @@
 //! - `BiliAPI` — B站 API 返回错误（带操作名和 code），用于 log_error!/log_warn!
 //! - `Crash` — 服务崩溃（actor 返回 Err 时使用）
 //! - `General` — 其他所有错误（网络、FFmpeg、IO 等，保留原始消息）
+//! - `FfmpegExitStatus` — FFmpeg 退出状态分类
 
 /// 统一错误枚举
 #[derive(Debug, thiserror::Error)]
@@ -151,5 +152,33 @@ pub fn start_live_error(code: i64, raw: &str) -> String {
         60037 => "在线开播已下线".into(),
         60043 => "本次开播需要身份验证".into(),
         _ => bili_common_error(code).unwrap_or(raw).to_string(),
+    }
+}
+
+// ── FFmpeg 退出状态 ──
+
+#[derive(Debug, Clone)]
+pub enum FfmpegExitStatus {
+    /// 正常结束（EOF / stop by user）
+    Normal,
+    /// system 层处理
+    Error(FfmpegErrorKind),
+}
+
+#[derive(Debug, Clone)]
+pub enum FfmpegErrorKind {
+    /// 进程被信号杀死
+    Crash(String),
+    /// 连接中断 / 读写出错
+    IoError(String),
+}
+
+impl FfmpegExitStatus {
+    pub fn message(&self) -> String {
+        match self {
+            FfmpegExitStatus::Normal => unreachable!(),
+            FfmpegExitStatus::Error(FfmpegErrorKind::Crash(s)) => format!("Crash: {}", s),
+            FfmpegExitStatus::Error(FfmpegErrorKind::IoError(s)) => format!("I/O: {}", s),
+        }
     }
 }

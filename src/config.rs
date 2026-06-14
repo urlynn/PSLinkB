@@ -30,7 +30,7 @@ pub struct RoomConfig {
     pub live_mode: crate::actors::blive::LiveMode,
 }
 
-/// 扫码登录成功后，CookieManager 调用 Config::save_auth_cookies() 写回此段。
+/// 扫码登录成功后，init::ensure_cookie() 调用 Config::save_auth_cookies() 写回此段。
 /// DedeUserID__ckMd5 是 DedeUserID 的 MD5 校验值，用于避免重复计算
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
@@ -102,7 +102,7 @@ impl Config {
         Ok(())
     }
 
-    /// CookieManager 调用此方法写入扫码登录获取的 cookie。
+    /// ensure_cookie() 调用此方法写入扫码登录获取的 cookie。
     #[cfg(not(feature = "openwrt"))]
     pub fn save_auth_cookies(
         path: &std::path::Path,

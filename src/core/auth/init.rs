@@ -1,14 +1,146 @@
 /// 认证初始化：cookie 验证 - IPC 状态写入 - QR 登录调度 - Room ID 获取
 
+use std::path::Path;
+
 use crate::config::Config;
-use crate::core::biliapi;
+use crate::core::biliapi::{self, UserInfo};
 use crate::core::error::AppError;
 use crate::log_warn;
 
-// ── Room ID 获取 ──
+/// 有效 cookie 返回字符串，无效 exec 重启
+pub async fn ensure_cookie(
+    config_path: &Path,
+    config: &Config,
+) -> Result<String, AppError> {
+    use crate::actors::blive::LiveMode;
+
+    if config.room.live_mode != LiveMode::Auto {
+        eprintln!("[INFO] 手动模式 - 跳过认证");
+        return Ok(String::new());
+    }
+
+    let cookie = load_cookie_string(config_path, config);
+
+    if !cookie.is_empty() {
+        match verify_cookie_str(&cookie).await {
+            Ok(Some(info)) => {
+                if config.room.room_id == 0 {
+                    discover_and_save_room(config_path, info.uid).await;
+                }
+                return Ok(cookie);
+            }
+            Ok(None) => eprintln!("[WARN] Cookie 已过期"),
+            Err(_) => {
+                eprintln!("[WARN] Cookie 验证失败 - 网络波动?");
+                return Ok(cookie);
+            }
+        }
+    } else {
+        eprintln!("[INFO] 未找到 Cookie");
+    }
+
+    // ── QR 扫码登录 ──
+    eprintln!("[INFO] 启动扫码登录...");
+    let cookies = super::login::scan_qr_blocking(config_path, config).await?;
+
+    save_cookies(config_path, &cookies)?;
+
+    let cookie_str: String = cookies
+        .iter()
+        .map(|c| format!("{}={}", c.name, c.value))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if let Ok(Some(info)) = verify_cookie_str(&cookie_str).await {
+        if config.room.room_id == 0 {
+            discover_and_save_room(config_path, info.uid).await;
+        }
+    }
+
+    // ── exec 重启 ──
+    eprintln!("[INFO] 登录完成，重启中...");
+
+    #[cfg(all(not(feature = "openwrt"), unix))]
+    {
+        use std::os::unix::process::CommandExt;
+        let exe = std::env::current_exe()
+            .unwrap_or_else(|_| Path::new("/proc/self/exe").to_path_buf());
+        let args: Vec<_> = std::env::args().skip(1).collect();
+        let err = std::process::Command::new(&exe).args(&args).exec();
+        panic!("exec failed: {err}");
+    }
+    #[cfg(windows)]
+    {
+        let exe = std::env::current_exe()
+            .unwrap_or_else(|_| Path::new("pslinkb.exe").to_path_buf());
+        let args: Vec<_> = std::env::args().skip(1).collect();
+        std::process::Command::new(&exe).args(&args).spawn().ok();
+        std::process::exit(0);
+    }
+    #[cfg(feature = "openwrt")]
+    {
+        std::process::exit(0);
+    }
+}
+
+// ── 验证 cookie ──
+
+pub async fn verify_cookie_str(cookie_str: &str) -> Result<Option<UserInfo>, AppError> {
+    let result = biliapi::get_user_info(cookie_str).await?;
+    match &result {
+        Some(info) => {
+            eprintln!("[Auth] 已登录 - {}: {}", info.uname, info.uid);
+            crate::luci::set("user", &info.uname);
+        }
+        None => {
+            crate::luci::set("user", "");
+        }
+    }
+    Ok(result)
+}
+
+// ── 内部辅助 ──
+
+#[cfg(not(feature = "openwrt"))]
+fn load_cookie_string(config_path: &Path, _config: &Config) -> String {
+    Config::load_cookie_string(config_path).unwrap_or_default()
+}
+
+#[cfg(feature = "openwrt")]
+fn load_cookie_string(_config_path: &Path, config: &Config) -> String {
+    if config.auth.cookies.is_empty() {
+        return String::new();
+    }
+    config.auth.cookies.iter()
+        .map(|c| format!("{}={}", c.name, c.value))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+#[cfg(not(feature = "openwrt"))]
+fn save_cookies(config_path: &Path, cookies: &[crate::config::CookieEntry]) -> Result<(), AppError> {
+    Config::save_auth_cookies(config_path, cookies)
+}
+
+#[cfg(feature = "openwrt")]
+fn save_cookies(_config_path: &Path, cookies: &[crate::config::CookieEntry]) -> Result<(), AppError> {
+    use std::process::Command;
+    let cookie_str: String = cookies.iter()
+        .map(|c| format!("{}={}", c.name, c.value))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if !Command::new("uci")
+        .args(["set", &format!("pslinkb.@auth[0].cookie={}", cookie_str)])
+        .output().map(|o| o.status.success()).unwrap_or(false)
+    {
+        return Err("uci set cookie failed".into());
+    }
+    Command::new("uci").args(["commit", "pslinkb"]).output()
+        .map_err(|e| format!("uci commit: {}", e))?;
+    Ok(())
+}
 
 async fn discover_and_save_room(
-    #[cfg_attr(feature = "openwrt", allow(unused))] config_path: &std::path::Path,
+    #[cfg_attr(feature = "openwrt", allow(unused))] config_path: &Path,
     uid: i64,
 ) -> Option<u64> {
     match biliapi::get_room_id(uid).await {
@@ -24,110 +156,6 @@ async fn discover_and_save_room(
             }
             Some(room_id)
         }
-        Err(e) => {
-            log_warn!("获取房间号失败 - {}", e);
-            None
-        }
-    }
-}
-
-// ── 共用：后台 QR 扫码登录 ──
-
-pub fn spawn_qr_login_background(config_path: &std::path::Path, cm: std::sync::Arc<std::sync::Mutex<crate::core::auth::CookieManager>>) {
-    let p = config_path.to_path_buf();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("qr runtime");
-        rt.block_on(async move {
-            loop {
-                match crate::core::auth::scan_login(&mut *cm.lock().unwrap()).await {
-                    Ok(user_info) => {
-                        discover_and_save_room(&p, user_info.uid).await;
-                        break;
-                    }
-                    Err(_) => {
-                        log_warn!("二维码登录失败，重试中");
-                        cm.lock().unwrap().clear_cache();
-                        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-                    }
-                }
-            }
-        });
-    });
-}
-
-// ── 认证检查 ──
-
-#[cfg(not(feature = "openwrt"))]
-pub async fn auth_check(
-    config: &mut Config,
-    config_path: &std::path::Path,
-    cli_cookie: Option<String>,
-) -> Result<(), AppError> {
-    use crate::actors::blive::LiveMode;
-    use crate::core::auth::CookieManager;
-
-    if config.room.live_mode != LiveMode::Auto {
-        eprintln!("[INFO] 手动模式 - 跳过认证");
-        return Ok(());
-    }
-
-    let mut cm = CookieManager::new(Some(config_path.to_path_buf()));
-    if let Some(c) = cli_cookie {
-        cm.set_cookie(c);
-    }
-
-    if cm.has_cookie() {
-        match cm.verify_cookie().await {
-            Ok(Some(info)) => {
-                if config.room.room_id == 0 {
-                    if let Some(room_id) = discover_and_save_room(config_path, info.uid).await {
-                        config.room.room_id = room_id;
-                    }
-                }
-            }
-            Ok(None) => {
-                eprintln!("[WARN] Cookie 已过期，启动扫码登录...");
-                cm.clear_cache();
-                spawn_qr_login_background(config_path, std::sync::Arc::new(std::sync::Mutex::new(cm)));
-            }
-            Err(e) => return Err(e),
-        }
-    } else {
-        eprintln!("[WARN] 无 Cookie，启动扫码登录...");
-        spawn_qr_login_background(config_path, std::sync::Arc::new(std::sync::Mutex::new(cm)));
-    }
-
-    Ok(())
-}
-
-#[cfg(feature = "openwrt")]
-pub async fn auth_check(
-    config: &Config,
-    _config_path: &std::path::Path,
-) -> Result<(), AppError> {
-    use crate::actors::blive::LiveMode;
-    if config.room.live_mode != LiveMode::Auto {
-        return Ok(());
-    }
-    Ok(())
-}
-
-// ── OpenWRT 认证初始化 ──
-
-#[cfg(feature = "openwrt")]
-pub async fn auth_init(config_path: &std::path::Path, cm: std::sync::Arc<std::sync::Mutex<crate::core::auth::CookieManager>>, config: &Config) {
-    let cookie = cm.lock().unwrap().get_cookie_string().ok().filter(|c| !c.is_empty());
-    if let Some(cookie) = cookie {
-        match crate::core::auth::verify_cookie_str(&cookie).await {
-            Ok(Some(info)) => {
-                if config.room.room_id == 0 {
-                    discover_and_save_room(config_path, info.uid).await;
-                }
-            }
-            Ok(None) => {
-                spawn_qr_login_background(config_path, cm.clone());
-            }
-            Err(_) => {} // 网络波动：保留旧 user，不丢失登录态
-        }
+        Err(e) => { log_warn!("获取房间号失败 - {}", e); None }
     }
 }

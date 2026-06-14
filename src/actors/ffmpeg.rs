@@ -5,12 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::core::event::Event;
-use crate::core::error::AppError;
+use crate::core::error::{AppError, FfmpegExitStatus, FfmpegErrorKind};
 use crate::log_error;
-#[cfg(not(feature = "external-ffmpeg"))]
-use crate::log_warn;
-#[cfg(not(feature = "external-ffmpeg"))]
-use crate::core::restart::{RestartPolicy, ExponentialBackoff};
 
 // ── 共享类型 ──
 
@@ -53,13 +49,17 @@ impl FfmpegActor {
                                 let input_url = crate::config::rtmp_url("127.0.0.1", &ps5_app, &ps5_stream_key);
                                 let output_url = format!("{}{}", bilibili_rtmp_url, bilibili_stream_key);
 
-                                if let Err(e) = Self::do_stream(
+                                match Self::do_stream(
                                     &input_url, &output_url, &flag, &mut inner_shutdown,
                                 ) {
-                                    log_error!("FFmpeg: Streaming error - {}", e);
-                                    let _ = et.try_send(Event::FfmpegError(e.to_string()));
-                                } else {
-                                    eprintln!("[FFmpeg] Streaming completed");
+                                    Err(FfmpegExitStatus::Normal) => {
+                                        eprintln!("[FFmpeg] Streaming completed");
+                                    }
+                                    Err(status) => {
+                                        log_error!("FFmpeg: Streaming error");
+                                        let _ = et.try_send(Event::FfmpegError(status));
+                                    }
+                                    Ok(()) => unreachable!(),
                                 }
                             });
                         }
@@ -82,7 +82,7 @@ impl FfmpegActor {
         input_url: &str, output_url: &str,
         flag: &Arc<AtomicBool>,
         shutdown_rx: &mut broadcast::Receiver<()>,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), FfmpegExitStatus> {
         self::ffi::do_stream(input_url, output_url, flag, shutdown_rx)
     }
 
@@ -91,7 +91,7 @@ impl FfmpegActor {
         input_url: &str, output_url: &str,
         flag: &Arc<AtomicBool>,
         shutdown_rx: &mut broadcast::Receiver<()>,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), FfmpegExitStatus> {
         self::external::do_stream(input_url, output_url, flag, shutdown_rx)
     }
 }
@@ -109,28 +109,9 @@ mod ffi {
         input_url: &str, output_url: &str,
         flag: &Arc<AtomicBool>,
         shutdown_rx: &mut broadcast::Receiver<()>,
-    ) -> Result<(), AppError> {
-        let policy = ExponentialBackoff::default();
-        let mut retry_count = 0u32;
-
-        loop {
-            if !flag.load(Ordering::SeqCst) { return Ok(()); }
-            if shutdown_rx.try_recv().is_ok() { return Ok(()); }
-
-            match do_stream_once(input_url, output_url, flag, shutdown_rx) {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    retry_count += 1;
-                    if !policy.should_restart(retry_count) {
-                        log_error!("FFmpeg: Failed after {} retries", policy.max_retries);
-                        return Err(e);
-                    }
-                    let delay = policy.next_delay(retry_count);
-                    log_warn!("FFmpeg: Retry {}/{} in {:?}: {}", retry_count, policy.max_retries, delay, e);
-                    std::thread::sleep(delay);
-                }
-            }
-        }
+    ) -> Result<(), FfmpegExitStatus> {
+        do_stream_once(input_url, output_url, flag, shutdown_rx)
+            .map_err(|e| FfmpegExitStatus::Error(FfmpegErrorKind::IoError(e.to_string())))
     }
 
     fn do_stream_once(
@@ -182,8 +163,8 @@ mod ffi {
             if !flag.load(Ordering::SeqCst) { eprintln!("[FFmpeg] Stopped by user"); break; }
             if shutdown_rx.try_recv().is_ok() { break; }
 
-            match ictx.read_packet()? {
-                Some(pkt) => {
+            match ictx.read_packet() {
+                Ok(Some(pkt)) => {
                     let idx = ffmpeg::pkt_stream_index(pkt) as usize;
                     if idx < stream_map.len() && stream_map[idx] >= 0 {
                         ffmpeg::pkt_set_stream_index(pkt, stream_map[idx]);
@@ -193,7 +174,9 @@ mod ffi {
                     ffmpeg::pkt_unref(pkt);
                     ffmpeg::pkt_free(pkt);
                 }
-                None => break,
+                Ok(None) => break,
+                Err(ref e) if e.to_string().contains("End of file") => break,
+                Err(e) => return Err(e),
             }
         }
 
@@ -230,7 +213,7 @@ mod external {
         input_url: &str, output_url: &str,
         flag: &Arc<AtomicBool>,
         shutdown_rx: &mut broadcast::Receiver<()>,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), FfmpegExitStatus> {
         let bin = find_stream_bin();
         eprintln!("[FFmpeg] {} {} {}", bin, input_url, output_url);
 
@@ -239,36 +222,42 @@ mod external {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .map_err(|e| FfmpegExitStatus::Error(FfmpegErrorKind::IoError(e.to_string())))?;
 
-        // 轮询：每 500ms 检查退出 / flag / shutdown
         loop {
             std::thread::sleep(std::time::Duration::from_millis(500));
 
             match child.try_wait() {
                 Ok(Some(status)) => {
                     if status.success() {
-                        return Ok(());
+                        return Err(FfmpegExitStatus::Normal);
                     }
-                    // 读取 stderr 获取错误信息
                     let mut err = String::new();
                     if let Some(mut stderr) = child.stderr {
                         let _ = std::io::Read::read_to_string(&mut stderr, &mut err);
                     }
-                    return Err(format!("pslinkb-stream exited with {}: {}", status, err.trim()).into());
+                    if status.code().is_none() {
+                        return Err(FfmpegExitStatus::Error(FfmpegErrorKind::Crash(
+                            format!("signal kill: {}", err.trim())
+                        )));
+                    }
+                    return Err(FfmpegExitStatus::Error(FfmpegErrorKind::IoError(
+                        format!("exited with {}: {}", status, err.trim())
+                    )));
                 }
                 Ok(None) => {}
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(FfmpegExitStatus::Error(FfmpegErrorKind::IoError(e.to_string()))),
             }
 
             if !flag.load(Ordering::SeqCst) {
                 eprintln!("[FFmpeg] Stopping worker...");
                 let _ = child.kill();
-                return Ok(());
+                return Err(FfmpegExitStatus::Normal);
             }
             if shutdown_rx.try_recv().is_ok() {
                 let _ = child.kill();
-                return Ok(());
+                return Err(FfmpegExitStatus::Normal);
             }
         }
     }

@@ -3,7 +3,6 @@
 /// 系统事件
 #[derive(Debug, Clone)]
 pub enum Event {
-    // ── RTMP 推流事件 ──
     /// PS5 开始推流
     RtmpPublish {
         app: String,
@@ -51,9 +50,8 @@ pub enum Event {
     },
 
     /// FFmpeg 推流出错
-    FfmpegError(String),
+    FfmpegError(crate::core::error::FfmpegExitStatus),
 
-    // ── 系统事件 ──
     /// 关闭信号
     Shutdown,
 }

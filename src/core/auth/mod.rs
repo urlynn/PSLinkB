@@ -1,11 +1,8 @@
-/// PSLinkB Authentication Module 
+/// PSLinkB Authentication Module
 
-pub mod cookie;
 pub mod init;
 pub mod login;
 
-// 重新导出常用类型
-pub use cookie::CookieManager;
-pub use cookie::verify_cookie_str;
-pub use init::auth_check;
-pub use login::scan_login;
+// 重新导出
+pub use init::ensure_cookie;
+pub use init::verify_cookie_str;

@@ -1,12 +1,9 @@
-//! PSLinkB — 调度层：加载配置 -> 创建通道 -> 启动 workers -> 事件循环
+//! PSLinkB — 调度层：加载配置 -> 认证检查 -> 创建通道 -> 启动 workers -> 事件循环
 
 use pslinkb::config::{RTMP_PORT, IRC_PORT};
 use pslinkb::core::channel::create_danmu_channel;
 use pslinkb::core::event::Event;
-#[cfg(feature = "openwrt")]
-use pslinkb::core::auth::init::{auth_init, spawn_qr_login_background};
-use pslinkb::core::auth::CookieManager;
-use pslinkb::core::auth::auth_check;
+use pslinkb::core::auth::ensure_cookie;
 use pslinkb::config::Config;
 use pslinkb::core::state::GlobalState;
 use pslinkb::system::{System, FfmpegCmd, BilibiliCmd, DanmakuCmd};
@@ -29,15 +26,37 @@ async fn main() -> Result<(), AppError> {
 
     // ── 加载配置 ──
     #[cfg(not(feature = "openwrt"))]
-    let (mut config, config_path, cli_cookie) = load_config()?;
+    let (config, config_path, cli_cookie) = load_config()?;
     #[cfg(feature = "openwrt")]
     let (config, config_path) = load_config()?;
 
-    // ── 认证检查（auto 模式）──
+    // ── CLI ──
     #[cfg(not(feature = "openwrt"))]
-    auth_check(&mut config, &config_path, cli_cookie.clone()).await?;
+    if let Some(ref cookie) = cli_cookie {
+        use pslinkb::config::CookieEntry;
+        let entries: Vec<CookieEntry> = cookie
+            .split(';')
+            .filter_map(|pair| {
+                let mut kv = pair.trim().splitn(2, '=');
+                let name = kv.next()?.trim();
+                let value = kv.next()?.trim();
+                if name.is_empty() { return None; }
+                Some(CookieEntry { name: name.to_string(), value: value.to_string() })
+            })
+            .collect();
+        if !entries.is_empty() {
+            Config::save_auth_cookies(&config_path, &entries)?;
+        }
+    }
+
+    // ── 认证（放行 or exec 重启）──
+    let cookie_string = ensure_cookie(&config_path, &config).await?;
+
+    // ── 重新加载配置 ──
+    #[cfg(not(feature = "openwrt"))]
+    let config = Config::from_file(&config_path)?;
     #[cfg(feature = "openwrt")]
-    auth_check(&config, &config_path).await?;
+    let config = Config::from_uci()?;
 
     eprintln!();
     eprintln!("╔══════════════════════════════════════╗");
@@ -61,36 +80,6 @@ async fn main() -> Result<(), AppError> {
             }
         });
     }
-
-    // ── CookieManager 单例 ──
-    let cm = std::sync::Arc::new(std::sync::Mutex::new(CookieManager::new(Some(config_path.clone()))));
-    #[cfg(not(feature = "openwrt"))]
-    if let Some(c) = cli_cookie {
-        cm.lock().unwrap().set_cookie(c);
-    }
-    // OpenWRT: 从 UCI Config 注入 cookie
-    #[cfg(feature = "openwrt")]
-    if !config.auth.cookies.is_empty() {
-        let c: String = config.auth.cookies.iter()
-            .map(|e| format!("{}={}", e.name, e.value))
-            .collect::<Vec<_>>()
-            .join("; ");
-        cm.lock().unwrap().set_cookie(c);
-    }
-    let mut cookie_string = match cm.lock().unwrap().get_cookie_string() {
-        Ok(c) => c,
-        Err(_) => {
-            #[cfg(feature = "openwrt")] {
-                luci::set("user", "");
-                spawn_qr_login_background(&config_path, cm.clone());
-            }
-            String::new()
-        }
-    };
-
-    // ── 认证初始化：验证已有 cookie，写入 IPC 状态 ──
-    #[cfg(feature = "openwrt")]
-    auth_init(&config_path, cm.clone(), &config).await;
 
     // ── 创建通道 ──
     let (event_tx, mut event_rx) = mpsc::channel::<Event>(256);
@@ -122,30 +111,10 @@ async fn main() -> Result<(), AppError> {
         spawn::spawn_danmaku_formatter(fmt_rx);
     }
 
-    // QR 登录完成后刷新 cookie（最多120s）
-    if cookie_string.is_empty() {
-        for _ in 0..120 {
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            cookie_string = cm.lock().unwrap().get_cookie_string().unwrap_or_default();
-            // TODO: auth 重构后移除 verify 验证与 exit 重启
-            if !cookie_string.is_empty() {
-                if let Ok(Some(info)) = pslinkb::core::auth::verify_cookie_str(&cookie_string).await {
-                    eprintln!();
-                    eprintln!("╔══════════════════════════════════════╗");
-                    eprintln!("║  登录完成, 请手动重启                ║");
-                    eprintln!("║  已登录为: {:>24}║", info.uname);
-                    eprintln!("╚══════════════════════════════════════╝");
-                    eprintln!();
-                    std::process::exit(0);
-                }
-            }
-        }
-    }
-
     // ── 启动按需 workers ──
     spawn::spawn_ffmpeg_worker(ffmpeg_rx, event_tx.clone());
-    spawn::spawn_bilibili_worker(bilibili_rx, event_tx.clone(), cm.clone());
-    spawn::spawn_danmaku_worker(danmaku_cmd_rx, danmaku_tx.clone(), cookie_string.clone(), event_tx.clone());
+    spawn::spawn_bilibili_worker(bilibili_rx, event_tx.clone(), cookie_string.clone());
+    spawn::spawn_danmaku_worker(danmaku_cmd_rx, danmaku_tx.clone(), cookie_string, event_tx.clone());
 
     // ── 主事件循环 ──
     loop {
