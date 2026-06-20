@@ -40,7 +40,7 @@ mod imp {
 #[cfg(feature = "openwrt")]
 pub use imp::*;
 
-#[cfg(not(feature = "openwrt"))]
+#[cfg(feature = "cli")]
 mod stub {
     pub fn init() {}
     pub fn set(_key: &str, _value: &str) {}
@@ -50,5 +50,5 @@ mod stub {
     pub fn reset() {}
 }
 
-#[cfg(not(feature = "openwrt"))]
+#[cfg(feature = "cli")]
 pub use stub::*;

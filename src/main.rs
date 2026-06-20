@@ -3,14 +3,18 @@
 use pslinkb::config::{RTMP_PORT, IRC_PORT};
 use pslinkb::core::channel::create_danmu_channel;
 use pslinkb::core::event::Event;
-use pslinkb::core::auth::ensure_cookie;
+use pslinkb::auth::ensure_cookie;
 use pslinkb::config::Config;
 use pslinkb::core::state::GlobalState;
 use pslinkb::system::{System, FfmpegCmd, BilibiliCmd, DanmakuCmd};
 use pslinkb::core::error::AppError;
-use pslinkb::{dispatch, luci, spawn, log_error};
-#[cfg(not(feature = "openwrt"))]
-use pslinkb::log_warn;
+use pslinkb::run::{Channels, run_loop};
+use pslinkb::{luci, spawn};
+#[cfg(feature = "cli")]
+use pslinkb::log;
+#[cfg(feature = "cli")]
+#[allow(unused_imports)]
+use pslinkb::cli;
 
 use tokio::sync::mpsc;
 
@@ -24,14 +28,18 @@ async fn main() -> Result<(), AppError> {
     rustls::crypto::ring::default_provider().install_default()
         .expect("TLS provider init failed");
 
+    // ── OpenWRT 关色──
+    #[cfg(feature = "openwrt")]
+    owo_colors::set_override(false);
+
     // ── 加载配置 ──
-    #[cfg(not(feature = "openwrt"))]
+    #[cfg(feature = "cli")]
     let (config, config_path, cli_cookie) = load_config()?;
     #[cfg(feature = "openwrt")]
     let (config, config_path) = load_config()?;
 
     // ── CLI ──
-    #[cfg(not(feature = "openwrt"))]
+    #[cfg(feature = "cli")]
     if let Some(ref cookie) = cli_cookie {
         use pslinkb::config::CookieEntry;
         let entries: Vec<CookieEntry> = cookie
@@ -52,8 +60,19 @@ async fn main() -> Result<(), AppError> {
     // ── 认证（放行 or exec 重启）──
     let cookie_string = ensure_cookie(&config_path, &config).await?;
 
+    // ── DNS 重定向检测 ──
+    let local_ip = pslinkb::utils::ip::local_ip();
+
+    #[cfg(feature = "dns-redirect")]
+    pslinkb::dns::auto_start(config.dns_proxy, &local_ip).await;
+
+    #[cfg(feature = "openwrt")]
+    {
+        pslinkb::dns::redirect::init(pslinkb::dns::REDIRECT_DOMAINS, &local_ip).await;
+    }
+
     // ── 重新加载配置 ──
-    #[cfg(not(feature = "openwrt"))]
+    #[cfg(feature = "cli")]
     let config = Config::from_file(&config_path)?;
     #[cfg(feature = "openwrt")]
     let config = Config::from_uci()?;
@@ -65,24 +84,13 @@ async fn main() -> Result<(), AppError> {
     eprintln!("╚══════════════════════════════════════╝");
     eprintln!();
     eprintln!("[INFO] RTMP: {} | IRC: {} | Room: {}",
-        RTMP_PORT, IRC_PORT, config.room.room_id);
+        RTMP_PORT, IRC_PORT, config.live.room_id);
     eprintln!();
 
     luci::init();
 
-    // ── ubus IPC（OpenWRT 模式）──
-    #[cfg(feature = "ubus-ipc")]
-    {
-        eprintln!("[INFO] ubus IPC mode");
-        std::thread::spawn(|| {
-            if let Err(e) = ubus::serve() {
-                log_error!("ubus: {}", AppError::crash("Server", e.to_string()));
-            }
-        });
-    }
-
     // ── 创建通道 ──
-    let (event_tx, mut event_rx) = mpsc::channel::<Event>(256);
+    let (event_tx, event_rx) = mpsc::channel::<Event>(256);
     let (ffmpeg_tx, ffmpeg_rx) = mpsc::channel::<FfmpegCmd>(8);
     let (bilibili_tx, bilibili_rx) = mpsc::channel::<BilibiliCmd>(8);
     let (danmaku_cmd_tx, danmaku_cmd_rx) = mpsc::channel::<DanmakuCmd>(8);
@@ -92,13 +100,13 @@ async fn main() -> Result<(), AppError> {
     let (irc_state_tx, irc_state_rx) = tokio::sync::watch::channel(GlobalState::default());
 
     // ── 创建状态机 ──
-    let mut system = System::new(config.clone(), irc_state_rx.clone());
+    let system = System::new(config.clone(), irc_state_rx.clone());
 
     let (irc_notify_tx, irc_notify_rx) = mpsc::channel::<String>(64);
     spawn::spawn_rtmp_server(event_tx.clone());
     spawn::spawn_irc_server(irc_state_tx, irc_notify_rx, event_tx.clone());
 
-    // IRC Client — 永恒 worker，跟随 channel_name 自动建连/断连
+    // IRC Client
     #[cfg(feature = "channel-mpsc")]
     spawn::spawn_irc_client_worker(danmaku_rx, irc_state_rx.clone());
 
@@ -117,54 +125,15 @@ async fn main() -> Result<(), AppError> {
     spawn::spawn_danmaku_worker(danmaku_cmd_rx, danmaku_tx.clone(), cookie_string, event_tx.clone());
 
     // ── 主事件循环 ──
-    loop {
-        tokio::select! {
-            event = event_rx.recv() => {
-                match event {
-                    Some(ev) => {
-                        let effects = system.handle(ev);
-                        for effect in effects {
-                            dispatch::dispatch(
-                                effect,
-                                &ffmpeg_tx,
-                                &bilibili_tx,
-                                &danmaku_cmd_tx,
-                                &irc_notify_tx,
-                            ).await;
-                        }
-                    }
-                    None => {
-                        log_error!("System: Event channel closed, exiting");
-                        break;
-                    }
-                }
-            }
-            _ = tokio::signal::ctrl_c() => {
-                eprintln!("\n[INFO] Ctrl+C, Shutting down...");
-                for effect in system.handle(Event::Shutdown) {
-                    dispatch::dispatch(
-                        effect,
-                        &ffmpeg_tx,
-                        &bilibili_tx,
-                        &danmaku_cmd_tx,
-                        &irc_notify_tx,
-                    ).await;
-                }
-                break;
-            }
-        }
-    }
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-    eprintln!("[INFO] Shutdown complete");
-    std::process::exit(0);
+    let ch = Channels { ffmpeg: ffmpeg_tx, bilibili: bilibili_tx, danmaku: danmaku_cmd_tx, irc_notify: irc_notify_tx };
+    run_loop(system, event_rx, ch, &local_ip).await
 }
 
 // ————————————————————————————————————————————————————————————
 // 配置加载
 // ————————————————————————————————————————————————————————————
 
-#[cfg(not(feature = "openwrt"))]
+#[cfg(feature = "cli")]
 fn load_config() -> Result<(Config, std::path::PathBuf, Option<String>), AppError> {
     use clap::Parser;
     use std::path::PathBuf;
@@ -178,7 +147,7 @@ fn load_config() -> Result<(Config, std::path::PathBuf, Option<String>), AppErro
         eprintln!("[INFO] Loading config: {}", config_path.display());
         Config::from_file(&config_path)?
     } else {
-        log_warn!("Config: Not found -  {}", config_path.display());
+        log!(warn, "Config: Not found -  {}", config_path.display());
         let example = Config::default();
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)?;

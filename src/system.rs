@@ -6,8 +6,8 @@ use crate::core::effect::Effect;
 use crate::core::event::Event;
 use crate::core::error::start_live_error;
 use crate::actors::blive::LiveMode;
-use crate::log_warn;
 use crate::core::state::GlobalState;
+use crate::log;
 use tokio::sync::watch;
 
 /// 系统状态
@@ -78,7 +78,7 @@ impl System {
         Self {
             state: State::Idle,
             config,
-            local_ip: local_ip(),
+            local_ip: crate::utils::ip::local_ip(),
             state_rx,
             notify_queue: Vec::new(),
         }
@@ -109,7 +109,7 @@ impl System {
                 crate::luci::set("rtmp", &rtmp_url(&self.local_ip, &app, &stream_key));
                 let mut effects = Vec::new();
 
-                if self.config.room.live_mode == LiveMode::Auto {
+                if self.config.live.live_mode == LiveMode::Auto {
                     self.state = State::LivePreparing {
                         app: app_c.clone(),
                         stream_key: key_c.clone(),
@@ -119,8 +119,8 @@ impl System {
                         rtmp_url(&self.local_ip, &app, &stream_key)
                     )));
                     effects.push(Effect::BilibiliStartLive {
-                        room_id: self.config.room.room_id,
-                        area_v2: self.config.room.area_v2.clone(),
+                        room_id: self.config.live.room_id,
+                        area_v2: self.config.live.area_v2.clone(),
                         title: self.title_param(),
                     });
                 } else {
@@ -129,7 +129,7 @@ impl System {
                         "PS5 streaming: {}",
                         rtmp_url(&self.local_ip, &app, &stream_key)
                     )));
-                    if self.config.room.live_mode == LiveMode::Manual {
+                    if self.config.live.live_mode == LiveMode::Manual {
                         effects.push(Effect::Log(format!(
                             "[Manual] RTMP: rtmp://127.0.0.1:1935/{}/{}",
                             app, stream_key
@@ -186,7 +186,7 @@ impl System {
                         bilibili_stream_key: bilibili_key,
                     },
                     Effect::StartDanmaku {
-                        room_id: self.config.room.room_id,
+                        room_id: self.config.live.room_id,
                     },
                 ]
             }
@@ -246,7 +246,7 @@ impl System {
             // B站关播结果 — 仅日志
             // ————————————————————————————————————————————
             (_, Event::BilibiliLiveStopped) => {
-                vec![Effect::Log("StopLive OK".into())]
+                vec![]
             }
             (_, Event::BilibiliLiveStopFailed { code, message }) => {
                 vec![Effect::Log(format!("StopLive failed ({}): {}", code, message))]
@@ -260,7 +260,7 @@ impl System {
                 vec![]
             }
             (State::Live { app, ps5_key, bili_url, bili_key, retried: false }, Event::BilibiliStreamTimeout { .. }) => {
-                log_warn!("Bili:Live: Live stream unconfirmed - FFmpeg restream");
+                log!(warn, "Bili:Live: Live stream unconfirmed - FFmpeg restream");
                 self.state = State::Live {
                     app: app.clone(), ps5_key: ps5_key.clone(),
                     bili_url: bili_url.clone(), bili_key: bili_key.clone(),
@@ -331,8 +331,7 @@ impl System {
                     self.state,
                     State::LivePreparing { .. } | State::Live { .. }
                 );
-                let mut effects = self.cleanup(was_live);
-                effects.push(Effect::Log("Shutdown".into()));
+                let effects = self.cleanup(was_live);
                 effects
             }
             // 无效转换 — 静默忽略
@@ -342,10 +341,10 @@ impl System {
 
     /// 辅助：生成开播 title 参数
     fn title_param(&self) -> Option<String> {
-        if self.config.room.title.is_empty() {
+        if self.config.live.title.is_empty() {
             None
         } else {
-            Some(self.config.room.title.clone())
+            Some(self.config.live.title.clone())
         }
     }
 
@@ -359,26 +358,9 @@ impl System {
         ];
         if was_live {
             effects.push(Effect::BilibiliStopLive {
-                room_id: self.config.room.room_id,
+                room_id: self.config.live.room_id,
             });
         }
         effects
     }
-}
-
-/// 理论上要支持所有的 LAN 口 IP 但我用的是 192.168.1.1
-/// 先自己用着 标记为 Todo
-fn local_ip() -> String {
-    if let Ok(s) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        if s.connect("192.168.1.1:80").is_ok() {
-            if let Ok(a) = s.local_addr() {
-                let ip = a.ip().to_string();
-                if ip != "0.0.0.0" { return ip; }
-            }
-        }
-    }
-    // Falback: 默认路由 - Openwrt 用这个获取的是 WAN 口 IP
-    std::net::UdpSocket::bind("0.0.0.0:0")
-        .and_then(|s| { s.connect("8.8.8.8:80")?; s.local_addr().map(|a| a.ip().to_string()) })
-        .unwrap_or_else(|_| "127.0.0.1".to_string())
 }

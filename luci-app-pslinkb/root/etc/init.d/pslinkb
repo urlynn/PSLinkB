@@ -5,7 +5,6 @@ START=90
 
 PROG=/usr/bin/pslinkb
 TMP_DIR=/tmp/pslinkb
-DNS_CONF=/etc/dnsmasq.d/pslinkb.conf
 
 start_service() {
     [ -x "$PROG" ] || {
@@ -15,9 +14,8 @@ start_service() {
 
     mkdir -p "$TMP_DIR"
 
-    LIVE_MODE=$(/sbin/uci -q get pslinkb.live.live_mode)
-    if [ "$LIVE_MODE" = "auto" ]; then
-        curl -s -X POST http://127.0.0.1/cgi-bin/luci/pslinkb-dns-on >/dev/null &
+    if [ -f "$TMP_DIR/log" ]; then
+        mv "$TMP_DIR/log" "$TMP_DIR/log.old"
     fi
 
     procd_open_instance
@@ -31,11 +29,10 @@ reload_service() {
 }
 
 stop_service() {
-    if [ -f "$DNS_CONF" ]; then
-        curl -s -X POST http://127.0.0.1/cgi-bin/luci/pslinkb-dns-off >/dev/null &
-    fi
-
-    rm -rf "$TMP_DIR"
+    for f in user qr_url qr_status rtmp stream error dns_status; do
+        rm -f "$TMP_DIR/$f"
+    done
+    return 0
 }
 
 service_triggers() {

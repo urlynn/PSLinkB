@@ -1,0 +1,10 @@
+<%+header%>
+<div id="view">
+	<div class="spinning"><%:Loading view…%></div>
+	<script>
+		L.require('ui').then(function(ui) {
+			ui.instantiateView('pslinkb/status');
+		});
+	</script>
+</div>
+<%+footer%>

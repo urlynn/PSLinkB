@@ -86,7 +86,7 @@ async fn poll_qr(
 
 // —— 桌面模式 ——
 
-#[cfg(not(feature = "openwrt"))]
+#[cfg(feature = "cli")]
 pub async fn scan_qr_blocking(
     _config_path: &Path, _config: &crate::config::Config,
 ) -> Result<Vec<CookieEntry>, AppError> {
@@ -111,7 +111,7 @@ pub async fn scan_qr_blocking(
     })
 }
 
-#[cfg(not(feature = "openwrt"))]
+#[cfg(feature = "cli")]
 fn print_qrcode_ascii(url: &str) {
     use qrcode::QrCode;
     eprintln!("请使用 B站客户端扫描下方二维码:");
@@ -124,6 +124,7 @@ fn print_qrcode_ascii(url: &str) {
 
 // —— OpenWRT 模式 ——
 
+// TODO-P0: qr_status 死代码待审查后移除 (Rust 只写不读，LuCI 也未读)
 #[cfg(feature = "openwrt")]
 pub async fn scan_qr_blocking(
     _config_path: &Path, _config: &crate::config::Config,

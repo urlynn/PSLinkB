@@ -1,7 +1,6 @@
 /// PSLinkB Core
 
 pub mod channel;
-pub mod auth;
 pub mod state;
 pub mod error;
 pub mod event;

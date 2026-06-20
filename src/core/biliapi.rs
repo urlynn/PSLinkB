@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
+use crate::log;
 use crate::core::error::AppError;
 use crate::core::error::bili_common_error;
 
@@ -337,7 +338,7 @@ pub async fn start_live(
 
     match api_response.code {
         0 => {
-            eprintln!("[Bili:Live] {} - {} -> {} - ✓ 开播成功", OP_START_LIVE, mode, status);
+            log!(ok, "[Bili:Live] {} - {} -> {} - ✓ 开播成功", OP_START_LIVE, mode, status);
             let data = api_response.data.ok_or_else(||
                 AppError::bili_api(OP_START_LIVE, 0, "响应结构异常: data=null"))?;
             Ok(StartLiveResult::Success { rtmp_url: data.rtmp.addr, stream_key: data.rtmp.code })
@@ -384,7 +385,7 @@ pub async fn stop_live(
 
     let status = response.status();
     let body = response.text().await?;
-    eprintln!("[Bili:Live] StopLive -> {} - ✓ 关播成功", status);
+    log!(ok, "[Bili:Live] StopLive -> {} - ✓ 关播成功", status);
     let api_response: BiliApiResp<StopLiveData> = serde_json::from_str(&body)?;
     match api_response.code {
         0 => Ok(()),

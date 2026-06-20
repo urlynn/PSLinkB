@@ -2,7 +2,7 @@
 //!
 //! 仅在非 openwrt 模式下编译。
 
-#![cfg(not(feature = "openwrt"))]
+#![cfg(feature = "cli")]
 
 use clap::Parser;
 

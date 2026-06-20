@@ -1,5 +1,5 @@
 //! ## 错误类型
-//! - `BiliAPI` — B站 API 返回错误（带操作名和 code），用于 log_error!/log_warn!
+//! - `BiliAPI` — B站 API 返回错误（带操作名和 code），用于 log! 宏
 //! - `Crash` — 服务崩溃（actor 返回 Err 时使用）
 //! - `General` — 其他所有错误（网络、FFmpeg、IO 等，保留原始消息）
 //! - `FfmpegExitStatus` — FFmpeg 退出状态分类
@@ -75,14 +75,14 @@ impl From<serde_json::Error> for AppError {
     }
 }
 
-#[cfg(not(feature = "openwrt"))]
+#[cfg(feature = "cli")]
 impl From<toml::de::Error> for AppError {
     fn from(err: toml::de::Error) -> Self {
         AppError::General(format!("TOML parse error: {}", err))
     }
 }
 
-#[cfg(not(feature = "openwrt"))]
+#[cfg(feature = "cli")]
 impl From<toml::ser::Error> for AppError {
     fn from(err: toml::ser::Error) -> Self {
         AppError::General(format!("TOML serialize error: {}", err))

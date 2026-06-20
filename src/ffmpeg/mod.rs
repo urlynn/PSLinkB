@@ -48,7 +48,7 @@ pub use ext_stubs::*;
 //  FFI 模式 — 以下仅在非 external-ffmpeg 时编译
 // ————————————————————————————————————————————————————————
 
-#[cfg(not(feature = "external-ffmpeg"))]
+#[cfg(feature = "ffi-ffmpeg")]
 mod ffi_impl {
     use super::*;
 
@@ -217,5 +217,5 @@ mod ffi_impl {
     }
 }
 
-#[cfg(not(feature = "external-ffmpeg"))]
+#[cfg(feature = "ffi-ffmpeg")]
 pub use ffi_impl::*;

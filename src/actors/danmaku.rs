@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use crate::core::channel::{DanmuMessage, DanmuSender};
 use crate::core::event::Event;
 use crate::core::error::AppError;
-use crate::log_warn;
+use crate::log;
 
 pub struct DanmuWorker {
     room_id: u64,
@@ -29,10 +29,10 @@ impl DanmuWorker {
         loop {
             match self.connect_and_stream().await {
                 Ok(()) => {
-                    log_warn!("Danmaku: Stream ended, reconnecting...");
+                    log!(warn, "Danmaku: Stream ended, reconnecting...");
                 }
                 Err(e) => {
-                    log_warn!("Danmaku: Connect failed: {}, reconnecting...", e);
+                    log!(warn, "Danmaku: Connect failed: {}, reconnecting...", e);
                 }
             }
 

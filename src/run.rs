@@ -1,0 +1,114 @@
+//! 主事件循环 — 信号处理 + 事件分发 + 关闭流程
+
+use crate::core::event::Event;
+use crate::core::error::AppError;
+use crate::dispatch;
+use crate::log;
+use crate::system::{System, FfmpegCmd, BilibiliCmd, DanmakuCmd};
+use tokio::sync::mpsc;
+
+#[cfg(unix)]
+use tokio::signal::unix::{signal, SignalKind};
+
+pub struct Channels {
+    pub ffmpeg: mpsc::Sender<FfmpegCmd>,
+    pub bilibili: mpsc::Sender<BilibiliCmd>,
+    pub danmaku: mpsc::Sender<DanmakuCmd>,
+    pub irc_notify: mpsc::Sender<String>,
+}
+
+async fn dispatch_effects(system: &mut System, event: Event, ch: &Channels) {
+    for effect in system.handle(event) {
+        dispatch::dispatch(effect, &ch.ffmpeg, &ch.bilibili, &ch.danmaku, &ch.irc_notify).await;
+    }
+}
+
+async fn do_shutdown(system: &mut System, ch: &Channels) {
+    #[cfg(feature = "openwrt")]
+    crate::dns::redirect::cleanup();
+    dispatch_effects(system, Event::Shutdown, ch).await;
+}
+
+pub async fn run_loop(
+    mut system: System,
+    mut event_rx: mpsc::Receiver<Event>,
+    ch: Channels,
+    #[allow(unused_variables)] local_ip: &str,
+) -> Result<(), AppError> {
+    #[cfg(feature = "openwrt")]
+    let mut sighup = signal(SignalKind::hangup()).expect("无法注册 SIGHUP");
+    #[cfg(unix)]
+    let mut sigterm = signal(SignalKind::terminate()).expect("无法注册 SIGTERM");
+
+    // SIGHUP 独立 task：避免被 tokio::select! 抢占
+    #[cfg(feature = "openwrt")]
+    let (hup_tx, mut hup_rx) = tokio::sync::mpsc::unbounded_channel();
+    #[cfg(feature = "openwrt")]
+    tokio::spawn(async move {
+        loop {
+            sighup.recv().await;
+            let _ = hup_tx.send(());
+        }
+    });
+
+    log!(ok, "[INFO] ✓ 初始化完成 - PS5 按下直播键即可开播");
+
+    loop {
+        #[cfg(unix)]
+        tokio::select! {
+            _ = async {
+                #[cfg(feature = "openwrt")]
+                hup_rx.recv().await;
+                #[cfg(not(feature = "openwrt"))]
+                std::future::pending::<()>().await;
+            } => {
+                #[cfg(feature = "openwrt")]
+                {
+                    crate::dns::redirect::handle_sighup(local_ip).await;
+                    continue;
+                }
+            }
+            event = event_rx.recv() => {
+                match event {
+                    Some(ev) => dispatch_effects(&mut system, ev, &ch).await,
+                    None => {
+                        log!(error, "System: Event channel closed, exiting");
+                        break;
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\n[INFO] Ctrl+C, Shutting down...");
+                do_shutdown(&mut system, &ch).await;
+                break;
+            }
+            _ = sigterm.recv() => {
+                eprintln!("[INFO] SIGTERM, Shutting down...");
+                do_shutdown(&mut system, &ch).await;
+                break;
+            }
+        }
+
+        #[cfg(not(unix))]
+        tokio::select! {
+            event = event_rx.recv() => {
+                match event {
+                    Some(ev) => dispatch_effects(&mut system, ev, &ch).await,
+                    None => {
+                        log!(error, "System: Event channel closed, exiting");
+                        break;
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\n[INFO] Ctrl+C, Shutting down...");
+                do_shutdown(&mut system, &ch).await;
+                break;
+            }
+        }
+    }
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    eprintln!("[INFO] Shutdown complete");
+    std::process::exit(0);
+}

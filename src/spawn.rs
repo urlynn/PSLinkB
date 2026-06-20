@@ -2,9 +2,7 @@
 
 use crate::core::error::AppError;
 use crate::core::biliapi;
-use crate::log_error;
-#[cfg(feature = "channel-broadcast")]
-use crate::log_warn;
+use crate::log;
 
 use tokio::sync::mpsc;
 
@@ -22,7 +20,7 @@ pub fn spawn_rtmp_server(event_tx: mpsc::Sender<Event>) {
     tokio::spawn(async move {
         let actor = crate::actors::rtmp::RtmpActor::new(RTMP_PORT, rtmp_tx);
         if let Err(e) = actor.run().await {
-            log_error!("RTMP: {}", AppError::crash("Server", e.to_string()));
+            log!(error, "RTMP: {}", AppError::crash("Server", e.to_string()));
         }
     });
 
@@ -51,7 +49,7 @@ pub fn spawn_irc_server(
     tokio::spawn(async move {
         let actor = crate::actors::irc_server::IrcServerActor::new(IRC_PORT, irc_state_tx, event_tx, irc_notify_rx);
         if let Err(e) = actor.run().await {
-            log_error!("IRC: {}", AppError::crash("Server", e.to_string()));
+            log!(error, "IRC: {}", AppError::crash("Server", e.to_string()));
         }
     });
 }
@@ -79,7 +77,7 @@ pub fn spawn_ffmpeg_worker(mut cmd_rx: mpsc::Receiver<crate::system::FfmpegCmd>,
 
                     tokio::spawn(async move {
                         if let Err(e) = actor.run(sdr).await {
-                            log_error!("FFmpeg: {}", AppError::crash("Worker", e.to_string()));
+                            log!(error, "FFmpeg: {}", AppError::crash("Worker", e.to_string()));
                         }
                     });
 
@@ -161,7 +159,7 @@ pub async fn execute_start_live(
 
     tokio::spawn(async move {
         if let Err(e) = manager.run(sd_tx.subscribe()).await {
-            log_error!("Bili:Live: {}", AppError::crash("Manager", e.to_string()));
+            log!(error, "Bili:Live: {}", AppError::crash("Manager", e.to_string()));
         }
     });
 
@@ -228,7 +226,7 @@ pub async fn execute_stop_live(
 
     tokio::spawn(async move {
         if let Err(e) = manager.run(sd_tx.subscribe()).await {
-            log_error!("Bili:Live: {}", AppError::crash("Manager", e.to_string()));
+            log!(error, "Bili:Live: {}", AppError::crash("Manager", e.to_string()));
         }
     });
 
@@ -267,7 +265,7 @@ async fn monitor_stream_status(room_id: u64, event_tx: mpsc::Sender<Event>) {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         match biliapi::get_stream_info(room_id).await {
             Ok(biliapi::StreamInfo::Live) => {
-                eprintln!("[Bili:Live] Live stream confirmed - GetStreamInfo, {} - ✓ 直播视频流验证成功", attempt);
+                log!(ok, "[Bili:Live] Live stream confirmed - GetStreamInfo, {} - ✓ 直播视频流验证成功", attempt);
                 crate::luci::set("stream", "live");
                 let _ = event_tx.send(Event::BilibiliStreamConfirmed { room_id }).await;
                 return;
@@ -287,7 +285,7 @@ async fn monitor_stream_status(room_id: u64, event_tx: mpsc::Sender<Event>) {
     }
     crate::luci::set("stream", "probing");
     if biliapi::flv_probe(room_id).await {
-        eprintln!("[Bili:Live] Live stream confirmed - PlayUrl - ✓ 直播视频流验证成功");
+        log!(ok, "[Bili:Live] Live stream confirmed - PlayUrl - ✓ 直播视频流验证成功");
         crate::luci::set("stream", "live");
         let _ = event_tx.send(Event::BilibiliStreamConfirmed { room_id }).await;
     } else {
@@ -319,7 +317,7 @@ pub fn spawn_danmaku_worker(
                                 room_id, cookie, sender, ev_tx,
                             );
                             if let Err(e) = worker.run().await {
-                                log_error!("Danmaku: {}", AppError::crash("Worker", e.to_string()));
+                                log!(error, "Danmaku: {}", AppError::crash("Worker", e.to_string()));
                             }
                         });
                         danmaku_handle = Some(handle);
@@ -346,7 +344,7 @@ pub fn spawn_irc_client_worker(
     tokio::spawn(async move {
         let worker = crate::actors::irc_client::IrcClientWorker::new(state_rx, Box::new(message_rx));
         if let Err(e) = worker.run().await {
-            log_error!("IRC:Cli: {}", AppError::crash("Worker", e.to_string()));
+            log!(error, "IRC:Cli: {}", AppError::crash("Worker", e.to_string()));
         }
     });
 }
@@ -360,7 +358,7 @@ pub fn spawn_danmaku_formatter(danmaku_rx: tokio::sync::broadcast::Receiver<crat
     let formatter = crate::utils::danmaku_formatter::DanmakuFormatter::new(Box::new(danmaku_rx));
     tokio::spawn(async move {
         if let Err(e) = formatter.run().await {
-            log_warn!("Danmu:Fmt: Format error - {}", e);
+            log!(warn, "Danmu:Fmt: Format error - {}", e);
         }
     });
 }

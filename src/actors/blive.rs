@@ -6,7 +6,7 @@ use tokio::sync::{broadcast, mpsc};
 use serde::{Deserialize, Serialize};
 use crate::core::biliapi::{self, StartLiveMode, StartLiveResult};
 use crate::core::error::AppError;
-use crate::{log_warn, log_error};
+use crate::log;
 
 // ————————————————————————————————————————————————————————————
 // Actor 类型
@@ -81,11 +81,11 @@ impl BLiveManager {
                             Ok(StartLiveResult::Success { .. }) => result,
                             Ok(StartLiveResult::Failed { code, .. }) if code == 60024 || code == 60043 => result,
                             Ok(StartLiveResult::Failed { code, message, .. }) => {
-                                log_warn!("Bili:Live: {} - Try Simple", AppError::bili_api("StartLive", code as i64, message));
+                                log!(warn, "Bili:Live: {} - Try Simple", AppError::bili_api("StartLive", code as i64, message));
                                 biliapi::start_live(&client, &self.cookie_string, &csrf, uid.as_deref(), room_id, &area_v2, title.as_deref(), StartLiveMode::Simple).await
                             }
                             Err(e) => {
-                                log_warn!("Bili:Live: {} - Try Simple", e);
+                                log!(warn, "Bili:Live: {} - Try Simple", e);
                                 biliapi::start_live(&client, &self.cookie_string, &csrf, uid.as_deref(), room_id, &area_v2, title.as_deref(), StartLiveMode::Simple).await
                             }
                         };
@@ -107,10 +107,10 @@ impl BLiveManager {
                                     if self.cancel.load(Ordering::Relaxed) {
                                         break;
                                     }
-                                    if start.elapsed().as_secs_f64() > 60.0 {
+                                    if start.elapsed().as_secs_f64() > 180.0 {
                                         crate::luci::clear("qr_url");
-                                        log_warn!("Bili:Live: 人脸验证超时 (60s)");
-                                        let _ = self.event_tx.send(LiveEvent::StartFailed { error_code: code as i64, message: "验证超时".into() }).await;
+                                        log!(warn, "Bili:Live: 人脸验证超时 - 180s");
+                                        let _ = self.event_tx.send(LiveEvent::StartFailed { error_code: -(code as i64), message: "人脸验证超时 - 180s".into() }).await;
                                         break;
                                     }
                                     let result = biliapi::start_live(&client, &self.cookie_string, &csrf, uid.as_deref(), room_id, &area_v2, title.as_deref(), StartLiveMode::Full).await;
@@ -132,11 +132,11 @@ impl BLiveManager {
                                 }
                             }
                             Ok(StartLiveResult::Failed { code, message, face_auth_url: _ }) => {
-                                log_error!("Bili:Live: {}", AppError::bili_api("StartLive", code as i64, message.clone()));
+                                log!(error, "Bili:Live: {}", AppError::bili_api("StartLive", code as i64, message.clone()));
                                 let _ = self.event_tx.send(LiveEvent::StartFailed { error_code: code as i64, message }).await;
                             }
                             Err(e) => {
-                                log_error!("Bili:Live: StartLive error - {}", e);
+                                log!(error, "Bili:Live: StartLive error - {}", e);
                                 let (ec, msg) = Self::parse_api_error(&e.to_string());
                                 let _ = self.event_tx.send(LiveEvent::StartFailed { error_code: ec, message: msg }).await;
                             }
@@ -146,7 +146,7 @@ impl BLiveManager {
                         match biliapi::stop_live(&client, &csrf, room_id).await {
                             Ok(_) => { self.state = LiveState::Idle; let _ = self.event_tx.send(LiveEvent::Stopped).await; }
                             Err(e) => {
-                                log_error!("Bili:Live: StopLive error - {}", e);
+                                log!(error, "Bili:Live: StopLive error - {}", e);
                                 let (ec, msg) = Self::parse_api_error(&e.to_string());
                                 let _ = self.event_tx.send(LiveEvent::StopFailed { error_code: ec, message: msg }).await;
                             }
@@ -204,17 +204,17 @@ impl BLiveManager {
     fn print_auth_info(code: i32, face_auth_url: &Option<String>) {
         if let Some(url) = face_auth_url {
             crate::luci::set("qr_url", url);
-            log_warn!("Bili:Live: {}", AppError::bili_api("StartLive", code as i64, crate::core::error::start_live_error(code as i64, "需要验证")));
+            log!(warn, "Bili:Live: {}", AppError::bili_api("StartLive", code as i64, crate::core::error::start_live_error(code as i64, "需要验证")));
             eprintln!("  人脸验证链接: {}", url);
             eprintln!("  验证完成后自动开播");
-            #[cfg(not(feature = "openwrt"))]
+            #[cfg(feature = "cli")]
             { print_face_auth_qrcode(url); }
         }
     }
 }
 
 /// 打印人脸验证二维码到终端
-#[cfg(not(feature = "openwrt"))]
+#[cfg(feature = "cli")]
 fn print_face_auth_qrcode(url: &str) {
     use qrcode::QrCode;
     match QrCode::new(url) {
@@ -224,6 +224,6 @@ fn print_face_auth_qrcode(url: &str) {
                 .light_color(qrcode::render::unicode::Dense1x2::Dark).build();
             println!("\n人脸验证二维码:\n{}", image);
         }
-        Err(e) => { log_warn!("Bili:Live: 二维码生成失败: {}", e); }
+        Err(e) => { log!(warn, "Bili:Live: 二维码生成失败: {}", e); }
     }
 }

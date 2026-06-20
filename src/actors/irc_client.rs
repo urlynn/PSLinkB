@@ -3,6 +3,8 @@
 use crate::core::channel::{DanmuMessage, DanmuReceiver};
 use crate::core::error::AppError;
 use crate::core::state::GlobalState;
+#[allow(unused_imports)]
+use crate::log;
 use blivemsg::types::Message;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -69,7 +71,7 @@ impl IrcClientWorker {
                                 if self.first {
                                     if let DanmuMessage::Danmaku(Message::Danmu(ref d)) = danmu_msg {
                                         self.first = false;
-                                        eprintln!("[Danmu] {}: {} - ✓首条弹幕工作正常", d.username, d.content);
+                                        log!(ok, "[Danmu] {}: {} - ✓ 首条弹幕工作正常", d.username, d.content);
                                     }
                                 }
                                 if let Some(irc_msg) = Self::format_message(&danmu_msg, &channel_name) {

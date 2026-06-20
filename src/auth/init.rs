@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::config::Config;
 use crate::core::biliapi::{self, UserInfo};
 use crate::core::error::AppError;
-use crate::log_warn;
+use crate::log;
 
 /// 有效 cookie 返回字符串，无效 exec 重启
 pub async fn ensure_cookie(
@@ -14,7 +14,7 @@ pub async fn ensure_cookie(
 ) -> Result<String, AppError> {
     use crate::actors::blive::LiveMode;
 
-    if config.room.live_mode != LiveMode::Auto {
+    if config.live.live_mode != LiveMode::Auto {
         eprintln!("[INFO] 手动模式 - 跳过认证");
         return Ok(String::new());
     }
@@ -24,7 +24,7 @@ pub async fn ensure_cookie(
     if !cookie.is_empty() {
         match verify_cookie_str(&cookie).await {
             Ok(Some(info)) => {
-                if config.room.room_id == 0 {
+                if config.live.room_id == 0 {
                     discover_and_save_room(config_path, info.uid).await;
                 }
                 return Ok(cookie);
@@ -51,7 +51,7 @@ pub async fn ensure_cookie(
         .collect::<Vec<_>>()
         .join("; ");
     if let Ok(Some(info)) = verify_cookie_str(&cookie_str).await {
-        if config.room.room_id == 0 {
+        if config.live.room_id == 0 {
             discover_and_save_room(config_path, info.uid).await;
         }
     }
@@ -59,7 +59,7 @@ pub async fn ensure_cookie(
     // ── exec 重启 ──
     eprintln!("[INFO] 登录完成，重启中...");
 
-    #[cfg(all(not(feature = "openwrt"), unix))]
+    #[cfg(all(feature = "cli", unix))]
     {
         use std::os::unix::process::CommandExt;
         let exe = std::env::current_exe()
@@ -88,7 +88,11 @@ pub async fn verify_cookie_str(cookie_str: &str) -> Result<Option<UserInfo>, App
     let result = biliapi::get_user_info(cookie_str).await?;
     match &result {
         Some(info) => {
-            eprintln!("[Auth] 已登录 - {}: {}", info.uname, info.uid);
+            use owo_colors::{OwoColorize, Stream, colors::css::HotPink};
+
+            let check = "✓ 已登录".if_supports_color(Stream::Stderr, |s| s.green());
+            let uname = info.uname.if_supports_color(Stream::Stderr, |s| s.fg::<HotPink>());
+            eprintln!("[Auth] {} - {}:{}", check, uname, info.uid);
             crate::luci::set("user", &info.uname);
         }
         None => {
@@ -100,7 +104,7 @@ pub async fn verify_cookie_str(cookie_str: &str) -> Result<Option<UserInfo>, App
 
 // ── 内部辅助 ──
 
-#[cfg(not(feature = "openwrt"))]
+#[cfg(feature = "cli")]
 fn load_cookie_string(config_path: &Path, _config: &Config) -> String {
     Config::load_cookie_string(config_path).unwrap_or_default()
 }
@@ -116,7 +120,7 @@ fn load_cookie_string(_config_path: &Path, config: &Config) -> String {
         .join("; ")
 }
 
-#[cfg(not(feature = "openwrt"))]
+#[cfg(feature = "cli")]
 fn save_cookies(config_path: &Path, cookies: &[crate::config::CookieEntry]) -> Result<(), AppError> {
     Config::save_auth_cookies(config_path, cookies)
 }
@@ -145,17 +149,17 @@ async fn discover_and_save_room(
 ) -> Option<u64> {
     match biliapi::get_room_id(uid).await {
         Ok(room_id) => {
-            eprintln!("[Auth] 从 API 获取 - 直播间 ID: {}", room_id);
-            #[cfg(not(feature = "openwrt"))]
+            log!(ok, "[Auth] ✓ 从 API 获取 - 直播间 ID: {}", room_id);
+            #[cfg(feature = "cli")]
             if let Err(e) = Config::save_room_id(config_path, room_id) {
-                log_warn!("保存房间号失败 - {}", e);
+                log!(warn, "保存房间号失败 - {}", e);
             }
             #[cfg(feature = "openwrt")]
             if let Err(e) = Config::save_room_id(room_id) {
-                log_warn!("保存房间号失败 - {}", e);
+                log!(warn, "保存房间号失败 - {}", e);
             }
             Some(room_id)
         }
-        Err(e) => { log_warn!("获取房间号失败 - {}", e); None }
+        Err(e) => { log!(warn, "获取房间号失败 - {}", e); None }
     }
 }

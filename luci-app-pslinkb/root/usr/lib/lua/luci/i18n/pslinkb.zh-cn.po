@@ -54,7 +54,7 @@ msgstr "准备中"
 msgid "Live"
 msgstr "直播中"
 
-msgid "Available"
+msgid "Live stream available"
 msgstr "直播中 - 流可用"
 
 msgid "Pending"
@@ -64,10 +64,10 @@ msgid "Face Verification Required"
 msgstr "需要人脸验证"
 
 msgid "Scan QR to complete face verification"
-msgstr "扫描二维码完成人脸验证"
+msgstr "请用 Bilibili 客户端扫描二维码完成人脸验证"
 
 msgid "Scan QR to verify"
-msgstr "扫描二维码验证"
+msgstr "或在移动端打开本页面 自动唤起验证"
 
 msgid "Verification complete, redirecting..."
 msgstr "验证完成，正在跳转..."
@@ -76,9 +76,9 @@ msgstr "在浏览器中打开"
 
 msgid "DNS Redirect"
 msgstr "DNS 重定向"
-msgid "Active"
-msgstr "已启用"
-msgid "Inactive"
+msgid "DNS active"
+msgstr "生效中"
+msgid "DNS inactive"
 msgstr "未启用"
 msgid "Checking"
 msgstr "检查中"
@@ -162,3 +162,36 @@ msgstr "无活跃验证"
 
 msgid "No face or QR verification is currently required."
 msgstr "当前无人脸或二维码验证需求"
+
+msgid "Start / Stop"
+msgstr "启动 / 停止"
+
+msgid "Restarting Dnsmasq"
+msgstr "重启 Dnsmasq 中"
+
+msgid "Closed successfully!"
+msgstr "关闭成功！"
+
+msgid "Stream timeout"
+msgstr "推流超时"
+
+msgid "Streaming"
+msgstr "推流中"
+
+msgid "Crashed"
+msgstr "崩溃"
+
+msgid "Service"
+msgstr "服务"
+
+msgid "Auto DNS Redirect"
+msgstr "自动 DNS 重定向"
+
+msgid "Auto control DNS redirect on PSLinkB start/stop"
+msgstr "PSLinkB 启停时自动控制 DNS 重定向"
+
+msgid "Checking…"
+msgstr "检测中…"
+
+msgid "Closing…"
+msgstr "关闭中…"

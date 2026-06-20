@@ -10,13 +10,15 @@ pub const IRC_PORT: u16 = 6667;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
-    pub room: RoomConfig,
+    pub live: LiveConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default = "default_true")]
+    pub dns_proxy: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RoomConfig {
+pub struct LiveConfig {
     #[serde(default = "default_room_id")]
     pub room_id: u64,
 
@@ -45,6 +47,7 @@ pub struct CookieEntry {
 }
 
 // 默认值
+fn default_true() -> bool { true }
 fn default_room_id() -> u64 { 0 }
 
 fn default_area_v2() -> String {
@@ -58,13 +61,14 @@ pub fn rtmp_url(host: &str, app: &str, key: &str) -> String {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            room: RoomConfig::default(),
+            live: LiveConfig::default(),
             auth: AuthConfig::default(),
+            dns_proxy: true,
         }
     }
 }
 
-impl Default for RoomConfig {
+impl Default for LiveConfig {
     fn default() -> Self {
         Self {
             room_id: default_room_id(),
@@ -87,7 +91,7 @@ impl Default for AuthConfig {
 
 impl Config {
     /// 从文件加载配置
-    #[cfg(not(feature = "openwrt"))]
+    #[cfg(feature = "cli")]
     pub fn from_file(path: &std::path::Path) -> Result<Self, AppError> {
         let content = std::fs::read_to_string(path)?;
         let config: Config = toml::from_str(&content)?;
@@ -95,7 +99,7 @@ impl Config {
     }
 
     /// 保存配置到文件
-    #[cfg(not(feature = "openwrt"))]
+    #[cfg(feature = "cli")]
     pub fn to_file(&self, path: &std::path::Path) -> Result<(), AppError> {
         let content = toml::to_string_pretty(self)?;
         std::fs::write(path, content)?;
@@ -103,7 +107,7 @@ impl Config {
     }
 
     /// ensure_cookie() 调用此方法写入扫码登录获取的 cookie。
-    #[cfg(not(feature = "openwrt"))]
+    #[cfg(feature = "cli")]
     pub fn save_auth_cookies(
         path: &std::path::Path,
         cookies: &[CookieEntry],
@@ -125,7 +129,7 @@ impl Config {
     }
 
     /// 从配置文件的 [auth.cookies] 段加载 cookie 字符串
-    #[cfg(not(feature = "openwrt"))]
+    #[cfg(feature = "cli")]
     pub fn load_cookie_string(path: &std::path::Path) -> Result<String, AppError> {
         let config = Self::from_file(path)?;
         if config.auth.cookies.is_empty() {
@@ -141,7 +145,7 @@ impl Config {
     }
 
     /// 用 CLI 参数覆盖配置值
-    #[cfg(not(feature = "openwrt"))]
+    #[cfg(feature = "cli")]
     pub fn apply_cli_overrides(
         &mut self,
         room_id: Option<u64>,
@@ -150,24 +154,24 @@ impl Config {
         mode: Option<crate::actors::blive::LiveMode>,
     ) {
         if let Some(id) = room_id {
-            self.room.room_id = id;
+            self.live.room_id = id;
         }
         if let Some(t) = title {
-            self.room.title = t;
+            self.live.title = t;
         }
         if let Some(a) = area {
-            self.room.area_v2 = a;
+            self.live.area_v2 = a;
         }
         if let Some(m) = mode {
-            self.room.live_mode = m;
+            self.live.live_mode = m;
         }
     }
 
     /// 保存 room_id 到配置文件（桌面 TOML）
-    #[cfg(not(feature = "openwrt"))]
+    #[cfg(feature = "cli")]
     pub fn save_room_id(path: &std::path::Path, room_id: u64) -> Result<(), AppError> {
         let mut config = Self::from_file(path).unwrap_or_default();
-        config.room.room_id = room_id;
+        config.live.room_id = room_id;
         config.to_file(path)
     }
 
@@ -217,12 +221,12 @@ impl Config {
                     if let Some((key, val)) = rest.split_once(' ') {
                         let val = val.trim_matches('\'').trim_matches('"');
                         match (section.as_str(), key) {
-                            ("live", "room_id") => { if let Ok(id) = val.parse::<u64>() { config.room.room_id = id; } }
-                            ("live", "area_v2") => { config.room.area_v2 = val.to_string(); }
-                            ("live", "title")   => { config.room.title = val.to_string(); }
+                            ("live", "room_id") => { if let Ok(id) = val.parse::<u64>() { config.live.room_id = id; } }
+                            ("live", "area_v2") => { config.live.area_v2 = val.to_string(); }
+                            ("live", "title")   => { config.live.title = val.to_string(); }
                             ("live", "live_mode") => {
                                 if let Ok(m) = crate::actors::blive::LiveMode::from_str(val) {
-                                    config.room.live_mode = m;
+                                    config.live.live_mode = m;
                                 }
                             }
                             _ => {}

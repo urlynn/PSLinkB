@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::core::event::Event;
 use crate::core::error::{AppError, FfmpegExitStatus, FfmpegErrorKind};
-use crate::log_error;
+use crate::log;
 
 // ── 共享类型 ──
 
@@ -56,7 +56,7 @@ impl FfmpegActor {
                                         eprintln!("[FFmpeg] Streaming completed");
                                     }
                                     Err(status) => {
-                                        log_error!("FFmpeg: Streaming error");
+                                        log!(error, "FFmpeg: Streaming error");
                                         let _ = et.try_send(Event::FfmpegError(status));
                                     }
                                     Ok(()) => unreachable!(),
@@ -77,13 +77,16 @@ impl FfmpegActor {
 
     // ── 平台分发 ──
 
-    #[cfg(not(feature = "external-ffmpeg"))]
+    #[cfg(feature = "ffi-ffmpeg")]
     fn do_stream(
         input_url: &str, output_url: &str,
         flag: &Arc<AtomicBool>,
         shutdown_rx: &mut broadcast::Receiver<()>,
     ) -> Result<(), FfmpegExitStatus> {
-        self::ffi::do_stream(input_url, output_url, flag, shutdown_rx)
+        match self::ffi::do_stream(input_url, output_url, flag, shutdown_rx) {
+            Ok(()) => Err(FfmpegExitStatus::Normal), // 正常完成（EOF）
+            Err(e) => Err(e),
+        }
     }
 
     #[cfg(feature = "external-ffmpeg")]
@@ -94,13 +97,23 @@ impl FfmpegActor {
     ) -> Result<(), FfmpegExitStatus> {
         self::external::do_stream(input_url, output_url, flag, shutdown_rx)
     }
+
+    // System ffmpeg - Todo
+    #[cfg(not(any(feature = "ffi-ffmpeg", feature = "external-ffmpeg")))]
+    fn do_stream(
+        _input_url: &str, _output_url: &str,
+        _flag: &Arc<AtomicBool>,
+        _shutdown_rx: &mut broadcast::Receiver<()>,
+    ) -> Result<(), FfmpegExitStatus> {
+        compile_error!("Must enable one of: ffi-ffmpeg, external-ffmpeg")
+    }
 }
 
 // ————————————————————————————————————————————————————————
 //  FFI 模式 — unsafe FFmpeg C 库
 // ————————————————————————————————————————————————————————
 
-#[cfg(not(feature = "external-ffmpeg"))]
+#[cfg(feature = "ffi-ffmpeg")]
 mod ffi {
     use super::*;
     use crate::ffmpeg::{self, InputContext, OutputContext, AVMediaType};

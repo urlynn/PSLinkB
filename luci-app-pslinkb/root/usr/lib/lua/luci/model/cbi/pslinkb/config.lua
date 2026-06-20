@@ -20,6 +20,10 @@ o4:value("manual")
 s2 = m:section(NamedSection, "auth", "auth", translate("Authentication"))
 s2:option(Value, "cookie", translate("Cookie"), translate("Format: SESSDATA=xxx; bili_jct=xxx")).password = true
 
+s3 = m:section(NamedSection, "config", "config", translate("Service"))
+o5 = s3:option(Flag, "dns_redirect", translate("Auto DNS Redirect"), translate("Auto control DNS redirect on PSLinkB start/stop"))
+o5.default = o5.enabled
+
 m.on_after_commit = function()
     luci.sys.call("uci commit pslinkb")
 end
