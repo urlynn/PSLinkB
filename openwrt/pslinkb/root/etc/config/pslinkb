@@ -1,0 +1,8 @@
+config live 'live'
+    option area_v2   '237'
+    option live_mode 'auto'
+
+config auth 'auth'
+
+config service 'service'
+    option dns_redirect '1'

@@ -1,0 +1,46 @@
+{
+	"admin/services/pslinkb": {
+		"title": "PSLinkB",
+		"order": 50,
+		"action": {
+			"type": "firstchild",
+			"recurse": true
+		}
+	},
+
+	"admin/services/pslinkb/status": {
+		"title": "Status",
+		"order": 1,
+		"action": {
+			"type": "view",
+			"path": "pslinkb/status"
+		}
+	},
+
+	"admin/services/pslinkb/config": {
+		"title": "Config",
+		"order": 2,
+		"action": {
+			"type": "view",
+			"path": "pslinkb/config"
+		}
+	},
+
+	"admin/services/pslinkb/log": {
+		"title": "Log",
+		"order": 3,
+		"action": {
+			"type": "view",
+			"path": "pslinkb/log"
+		}
+	},
+
+	"admin/services/pslinkb/auth": {
+		"title": "Auth",
+		"order": 4,
+		"action": {
+			"type": "view",
+			"path": "pslinkb/auth"
+		}
+	}
+}

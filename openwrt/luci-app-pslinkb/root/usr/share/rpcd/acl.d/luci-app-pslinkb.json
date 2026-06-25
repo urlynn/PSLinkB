@@ -1,0 +1,17 @@
+{
+	"luci-app-pslinkb": {
+		"description": "Grant access to PSLinkB configuration",
+		"read": {
+			"uci": [ "pslinkb" ],
+			"ubus": {
+				"luci.pslinkb": [ "log_read", "status_get", "dns_status_get", "app_info", "check_updates", "check_binary", "version_get", "version_latest_get", "luci_version_latest_get", "app_version_get", "install_package" ]
+			}
+		},
+		"write": {
+			"uci": [ "pslinkb" ],
+			"ubus": {
+				"luci.pslinkb": [ "log_clear", "svc_start", "svc_stop", "svc_restart", "config_reload", "dns_toggle", "auth_done", "install_package" ]
+			}
+		}
+	}
+}

@@ -1,0 +1,36 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=90
+
+PROG=/usr/bin/pslinkb
+TMP_DIR=/tmp/pslinkb
+
+start_service() {
+    [ -x "$PROG" ] || {
+        echo "pslinkb binary not found: $PROG"
+        return 1
+    }
+
+    mkdir -p "$TMP_DIR"
+
+    if [ -f "$TMP_DIR/log" ]; then
+        mv "$TMP_DIR/log" "$TMP_DIR/log.old"
+    fi
+
+    procd_open_instance
+    procd_set_param command /bin/sh -c "exec $PROG 2>>$TMP_DIR/log"
+    procd_set_param respawn 3600 5 30
+    procd_close_instance
+}
+
+reload_service() {
+    kill -USR1 $(pidof pslinkb) 2>/dev/null
+}
+
+stop_service() {
+    for f in user qr_url qr_status rtmp stream error; do
+        rm -f "$TMP_DIR/$f"
+    done
+    return 0
+}

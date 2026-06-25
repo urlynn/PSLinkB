@@ -1,0 +1,198 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8"
+
+msgid "PSLinkB"
+msgstr "PSLinkB"
+msgid "Status"
+msgstr "状态"
+msgid "Config"
+msgstr "设置"
+msgid "Log"
+msgstr "日志"
+msgid "Auth"
+msgstr "认证"
+
+msgid "Running"
+msgstr "运行中"
+msgid "Stopped"
+msgstr "已停止"
+msgid "Restart"
+msgstr "重启"
+
+msgid "Login"
+msgstr "登录"
+msgid "Not logged in"
+msgstr "未登录"
+
+msgid "Live Status"
+msgstr "直播状态"
+msgid "Idle"
+msgstr "空闲"
+
+msgid "Live stream available"
+msgstr "直播中 - 流可用"
+
+msgid "Pending"
+msgstr "已开播 - 等待就绪"
+
+msgid "Or open this page on mobile to auto-launch login"
+msgstr "或在移动端打开本页面 自动唤起登录"
+
+msgid "DNS Redirect"
+msgstr "DNS 重定向"
+msgid "DNS active"
+msgstr "生效中"
+msgid "DNS inactive"
+msgstr "未启用"
+msgid "Checking"
+msgstr "检查中"
+
+msgid "Live Configuration"
+msgstr "直播配置"
+msgid "Room ID"
+msgstr "房间号"
+msgid "Live Room ID"
+msgstr "直播间ID"
+msgid "Area ID"
+msgstr "分区 ID"
+msgid "Default 237 - Single Player - Console Game"
+msgstr "默认 237 - 单机游戏 - 主机游戏"
+msgid "Title"
+msgstr "直播标题"
+msgid "Leave empty for original title"
+msgstr "留空即保持原标题"
+msgid "Live Mode"
+msgstr "运行模式"
+msgid "Auto - One-Click Start | Manual - Manual Control"
+msgstr "Auto - 一键开播 | Manual - 手动开播"
+msgid "Authentication"
+msgstr "认证"
+msgid "Cookie"
+msgstr "Cookie"
+msgid "Format: SESSDATA=xxx; bili_jct=xxx"
+msgstr "格式: SESSDATA=xxx; bili_jct=xxx"
+
+msgid "Auto"
+msgstr "自动"
+msgid "Manual"
+msgstr "手动"
+
+msgid "Save & Apply"
+msgstr "保存并应用"
+
+msgid "Push URL"
+msgstr "推流链接"
+
+msgid "Ready"
+msgstr "已就绪"
+
+msgid "Click to copy"
+msgstr "点击复制"
+
+msgid "Copied to clipboard"
+msgstr "已复制到剪贴板"
+
+msgid "Scan QR to Login"
+msgstr "扫码登录"
+
+msgid "Scanned, please confirm on your phone"
+msgstr "已扫描，请在手机上确认"
+
+msgid "Login success! Redirecting to status page"
+msgstr "登录成功! 正在跳转状态页"
+
+msgid "Auto refresh"
+msgstr "自动刷新"
+
+msgid "Start / Stop"
+msgstr "启动 / 停止"
+
+msgid "Restarting Dnsmasq"
+msgstr "重启 Dnsmasq 中"
+
+msgid "Closed successfully!"
+msgstr "关闭成功！"
+
+msgid "Stream timeout"
+msgstr "推流超时"
+
+msgid "Streaming"
+msgstr "推流中"
+
+msgid "Crashed"
+msgstr "崩溃"
+
+msgid "Service"
+msgstr "服务"
+
+msgid "Auto DNS Redirect"
+msgstr "自动 DNS 重定向"
+
+msgid "Auto control DNS redirect on PSLinkB start/stop"
+msgstr "PSLinkB 启停时自动控制 DNS 重定向"
+
+msgid "Closing"
+msgstr "关闭中"
+
+msgid "Restarting"
+msgstr "重启中"
+
+msgid "Face Verification Required"
+msgstr "需要人脸验证"
+
+msgid "Scan QR to complete face verification"
+msgstr "请用 Bilibili 客户端扫描二维码完成人脸验证"
+
+msgid "Verification complete! Redirecting to status page"
+msgstr "验证完成! 正在跳转状态页"
+
+msgid "No Active Verification"
+msgstr "无活跃验证"
+
+msgid "No face or QR verification is currently required."
+msgstr "当前无人脸或二维码验证需求"
+
+msgid "Redirecting to status page"
+msgstr "正在跳转状态页"
+
+msgid "Clear Log"
+msgstr "清除日志"
+
+msgid "Starting"
+msgstr "启动中"
+
+msgid "Stopping"
+msgstr "关闭中"
+
+msgid "Redirecting..."
+msgstr "跳转中..."
+
+msgid "not installed"
+msgstr "未安装"
+
+msgid "PSLinkB binary not found. Install now?"
+msgstr "未安装 PSLinkB, 是否自动安装？"
+
+msgid "Install"
+msgstr "安装"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid "Installing"
+msgstr "安装中"
+
+msgid "Installation failed"
+msgstr "安装失败"
+
+msgid "N/A"
+msgstr "N/A"
+
+msgid "Installation succeeded"
+msgstr "安装成功"
+
+msgid "update available"
+msgstr "有可用更新"
+
+msgid "available, install now?"
+msgstr "可用，是否安装？"
