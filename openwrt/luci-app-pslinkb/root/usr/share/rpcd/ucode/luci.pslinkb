@@ -1,0 +1,277 @@
+'use strict';
+
+import { open, popen } from 'fs';
+
+// ── URLs ─────────────────────────────────────
+
+const GH = 'https://github.com/urlynn';
+const GH_PSLINKB = GH + '/PSLinkB';
+const GH_PSLINKB_RAW = 'https://raw.githubusercontent.com/urlynn/PSLinkB/main';
+const PSLINKB_URL = GH_PSLINKB;
+const LUCI_URL = GH_PSLINKB + '/releases/latest';
+
+// ── Helpers ──────────────────────────────────
+
+function read_ipc(key) {
+	const fd = open('/tmp/pslinkb/' + key, 'r');
+	if (!fd) return '';
+	const line = fd.read('line');
+	fd.close();
+	return line ? trim(line) : '';
+}
+
+function lan_ip() {
+	const fd = popen('uci get network.lan.ipaddr 2>/dev/null');
+	if (!fd) return '';
+	const line = fd.read('line');
+	fd.close();
+	return line ? trim(line) : '';
+}
+
+function running() {
+	const fd = popen('pidof pslinkb 2>/dev/null || true');
+	if (fd) {
+		const line = fd.read('line');
+		fd.close();
+		return length(line) > 0;
+	}
+	return false;
+}
+
+function check_streaming() {
+	const fd = popen('pidof pslinkb-stream 2>/dev/null || true');
+	if (fd) {
+		const line = fd.read('line');
+		fd.close();
+		return length(line) > 0;
+	}
+	return false;
+}
+
+function uci_get(path) {
+	const fd = popen('uci get ' + path + ' 2>/dev/null');
+	if (!fd) return '';
+	const line = fd.read('line');
+	fd.close();
+	return line ? trim(line) : '';
+}
+
+function push_url() {
+	const mode = uci_get('pslinkb.@live[0].live_mode') || 'auto';
+	if (mode !== 'manual') return '';
+	const key = uci_get('pslinkb.@live[0].stream_key');
+	if (!key) return '';
+	return 'rtmp://' + lan_ip() + ':1935/live/' + key;
+}
+
+function read_file(path) {
+	const fd = open(path, 'r');
+	if (!fd) return '';
+	const text = fd.read('all') || '';
+	fd.close();
+	return trim(text);
+}
+
+function ver_greater(a, b) {
+	if (!a || !b) return false;
+	a = split(a, '-')[0]; b = split(b, '-')[0];
+	const ap = split(a, '.'), bp = split(b, '.');
+	for (let i = 0; i < max(length(ap), length(bp)); i++) {
+		const an = +(i < length(ap) ? ap[i] : 0);
+		const bn = +(i < length(bp) ? bp[i] : 0);
+		if (an > bn) return true; if (an < bn) return false;
+	}
+	return false;
+}
+
+function pkg_type() {
+	let fd = open('/usr/bin/apk', 'r'); if (fd) { fd.close(); return 'apk'; }
+	fd = open('/bin/opkg', 'r');        if (fd) { fd.close(); return 'opkg'; }
+	return 'unknown';
+}
+
+function read_local_pslinkb_ver() {
+	const af = open('/lib/apk/db/installed', 'r');
+	if (af) {
+		const re = regexp('P:pslinkb' + chr(10) + 'V:([^' + chr(10) + ']+)', '');
+		const m = match(af.read('all'), re); af.close();
+		if (m) return m[1];
+	}
+	const fd = open('/usr/lib/opkg/info/pslinkb.control', 'r');
+	if (fd) {
+		const re = regexp('Version:\\s*([^' + chr(10) + ']+)', '');
+		const m = match(fd.read('all'), re); fd.close();
+		if (m) return m[1];
+	}
+	const pf = popen('( pslinkb --version & pid=$!; sleep 1; kill $pid 2>/dev/null; wait $pid 2>/dev/null ) 2>/dev/null');
+	if (pf) { let line = pf.read('line'); pf.close(); if (line) { line = trim(line); if (index(line, 'pslinkb') == 0) line = trim(substr(line, length('pslinkb'))); if (line) return line; } }
+	return '';
+}
+
+function read_local_luci_ver() {
+	const af = open('/lib/apk/db/installed', 'r');
+	if (af) {
+		const re = regexp('P:luci-app-pslinkb' + chr(10) + 'V:([^' + chr(10) + ']+)', '');
+		const m = match(af.read('all'), re); af.close();
+		if (m) return m[1];
+	}
+	const fd = open('/usr/lib/opkg/info/luci-app-pslinkb.control', 'r');
+	if (fd) {
+		const re = regexp('Version:\\s*([^' + chr(10) + ']+)', '');
+		const m = match(fd.read('all'), re); fd.close();
+		if (m) return m[1];
+	}
+	return '';
+}
+
+function fetch_latest() {
+	const fd = popen("curl -sI --connect-timeout 5 --max-time 10 " + GH_PSLINKB + "/releases/latest 2>/dev/null | grep -i '^location:' | grep -o 'tag/v[0-9.]*' | sed 's|tag/v||'");
+	if (!fd) return ''; const line = fd.read('line'); fd.close();
+	return line ? trim(line) : '';
+}
+
+function fetch_luci_latest() {
+	const fd = popen('curl -s --connect-timeout 5 --max-time 10 ' + GH_PSLINKB_RAW + '/openwrt/luci-app-pslinkb/VERSION 2>/dev/null | tr -d "\\r\\n "');
+	if (!fd) return ''; const line = fd.read('line'); fd.close();
+	return line ? trim(line) : '';
+}
+
+// ── Methods ─────────────────────────────────
+
+const methods = {
+
+	// ── App Info ──────────────────────────────
+
+	app_info: {
+		call: function() {
+			let bin = false;
+			const bfd = open('/usr/bin/pslinkb', 'r'); if (bfd) { bfd.close(); bin = true; }
+			return { ver: read_local_pslinkb_ver(), luci_ver: read_local_luci_ver(), pslinkb_url: PSLINKB_URL, luci_url: LUCI_URL, pkg_type: pkg_type(), binary_installed: bin };
+		}
+	},
+
+	check_updates: {
+		call: function() {
+			const lv = read_local_pslinkb_ver(), ll = read_local_luci_ver();
+			const latest = fetch_latest();
+			const luci_latest = fetch_luci_latest();
+			return { latest_ver: (latest && ver_greater(latest, lv)) ? latest : '', latest_luci: (luci_latest && ver_greater(luci_latest, ll)) ? luci_latest : '' };
+		}
+	},
+
+	// ── Status ──────────────────────────────
+
+	status_get: {
+		call: function() {
+			const run = running();
+			let err = '';
+			if (run) { const efd = open('/tmp/pslinkb/error', 'r'); if (efd) { err = efd.read('line') || ''; efd.close(); err = trim(err); } }
+			let err_display = '';
+			if (length(err)) { const mfd = popen('date -r /tmp/pslinkb/error +%s 2>/dev/null'); if (mfd) { const mline = mfd.read('line'); mfd.close(); const mtime = +(mline ? trim(mline) : 0); if (time() - mtime < 30) err_display = err; } }
+			const streaming = run ? check_streaming() : false;
+			return { running: run, mode: run ? uci_get('pslinkb.@live[0].live_mode') || 'auto' : '', user: run ? read_ipc('user') : '', qr: run ? read_ipc('qr_url') : '', qr_status: run ? read_ipc('qr_status') : '', rtmp: run ? read_ipc('rtmp') : '', error: err_display, stream: run ? read_ipc('stream') : '', streaming: streaming, stream_crashed: !streaming && index(err, 'FFmpeg: Worker crashed') >= 0, push_url: run ? push_url() : '' };
+		}
+	},
+
+	// ── DNS ─────────────────────────────────
+
+	dns_status_get: {
+		call: function() {
+			const fd = open('/tmp/pslinkb/dns_status', 'r');
+			if (!fd) return { checking: false, enabled: false, target: '', actual: '', ok: false };
+			const line = fd.read('line'); fd.close(); const raw = line ? trim(line) : '';
+			if (!length(raw)) return { checking: false, enabled: false, target: '', actual: '', ok: false };
+			return json(raw);
+		}
+	},
+
+	// ── 服务控制 ──────────────────────────────
+
+	svc_start:  { call: function() { popen('/etc/init.d/pslinkb start >/dev/null 2>&1'); return { ok: true }; } },
+	svc_stop:   { call: function() { popen('/etc/init.d/pslinkb stop >/dev/null 2>&1'); return { ok: true }; } },
+	svc_restart:{ call: function() { popen('/etc/init.d/pslinkb restart >/dev/null 2>&1'); return { ok: true }; } },
+	config_reload:{ call: function() { popen('kill -USR1 $(pidof pslinkb) 2>/dev/null'); return { ok: true }; } },
+	auth_done:  { call: function() { const fd = open('/tmp/pslinkb/qr_status', 'w'); if (fd) fd.close(); return { ok: true }; } },
+
+	dns_toggle: {
+		args: { val: '0' },
+		call: function(request) {
+			const val = '' + request.args.val;
+			if (val !== '1' && val !== '0') return { ok: false };
+			popen('kill -HUP $(pgrep pslinkb) 2>/dev/null &');
+			return { ok: true };
+		}
+	},
+
+	// ── 日志 ──────────────────────────────────
+
+	log_read: {
+		args: { lines: 0 },
+		call: function(request) {
+			const n = (request.args.lines > 0) ? request.args.lines : 80;
+			const fd = popen('tail -n ' + n + ' /tmp/pslinkb/log 2>/dev/null');
+			if (!fd) return { text: '' };
+			const text = fd.read('all') || ''; fd.close();
+			return { text: text };
+		}
+	},
+	log_clear: {
+		call: function() {
+			const fd = open('/tmp/pslinkb/log', 'w'); if (fd) fd.close();
+			return { ok: true };
+		}
+	},
+
+	// ── 安装/升级 ──────────────────────────────
+
+	install_package: {
+		args: { data: { type: 'pslinkb', version: '' } },
+		call: function(request) {
+			const type = request.args.data.type || 'pslinkb';
+			let ver = request.args.data.version;
+			let afd = popen('uname -m');
+			const arch = afd ? trim(afd.read('line') || '') : '';
+			if (afd) afd.close();
+			if (!length(arch)) return { ok: false, error: 'arch?', log: 'uname -m failed' };
+			const pt = pkg_type();
+
+			if (!length(ver) || ver == '?') {
+				ver = (type == 'pslinkb') ? fetch_latest() : fetch_luci_latest();
+				if (!length(ver)) return { ok: false, error: 'version unknown', log: 'GitHub unreachable, cannot determine latest version' };
+			}
+
+			let ext, asset;
+			if (type == 'pslinkb') {
+				ext = (pt == 'apk') ? 'apk' : (pt == 'opkg') ? 'ipk' : 'tar.gz';
+				asset = 'pslinkb-' + ver + '-' + arch + '-openwrt.' + ext;
+			} else {
+				ext = (pt == 'apk') ? 'apk' : 'ipk';
+				asset = 'luci-app-pslinkb-' + ver + '.' + ext;
+			}
+			const url = GH_PSLINKB + '/releases/latest/download/' + asset;
+
+			const dl = '/tmp/pslinkb-install.' + ext;
+			popen('/etc/init.d/pslinkb stop >/dev/null 2>&1');
+
+			let r = popen('curl -sSL --connect-timeout 15 --max-time 120 -o ' + dl + ' "' + url + '" 2>&1');
+			let dlog = r ? (r.read('all') || '') : '';
+			if (r) r.close();
+
+			if (ext == 'tar.gz')
+				r = popen('cd /tmp && tar xzf ' + dl + ' -C / 2>&1 && chmod +x /usr/bin/pslinkb /usr/bin/pslinkb-stream 2>&1; echo EXIT:$?');
+			else if (ext == 'apk')
+				r = popen('apk add --allow-untrusted ' + dl + ' 2>&1; echo EXIT:$?');
+			else
+				r = popen('opkg install ' + dl + ' 2>&1; echo EXIT:$?');
+
+			let out = r ? (r.read('all') || '') : 'popen failed';
+			if (r) r.close();
+			popen('rm -f ' + dl);
+
+			let ok = index(out, 'EXIT:0') >= 0;
+			return { ok: ok, error: ok ? '' : 'install failed', log: url + '\n' + dlog + out };
+		}
+	}
+};
+
+return { 'luci.pslinkb': methods };

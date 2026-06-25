@@ -1,0 +1,5 @@
+#!/bin/sh
+rm -f /usr/lib/lua/luci/controller/pslinkb.lua
+rm -rf /tmp/luci-* /tmp/luci-modulecache/ /tmp/luci-indexcache*
+/etc/init.d/rpcd restart
+/etc/init.d/uhttpd restart 2>/dev/null || /etc/init.d/nginx restart 2>/dev/null
