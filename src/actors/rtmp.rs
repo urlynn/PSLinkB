@@ -1,4 +1,4 @@
-/// RTMP Actor
+//! RTMP Actor
 
 use rtmp_rs::{RtmpHandler, RtmpServer, ServerConfig, AuthResult};
 use rtmp_rs::session::{SessionContext, StreamContext};
@@ -49,13 +49,14 @@ impl RtmpActor {
             active_streams: Arc::new(Mutex::new(HashMap::new())),
         };
         
-        eprintln!("[RTMP] Listening on {}", addr);
+        eprintln!("[RTMP] Listening - {}", addr);
         
         let server = RtmpServer::new(
             ServerConfig::default()
                 .bind(addr)
                 .max_connections(100)
-                .chunk_size(4096),
+                .chunk_size(4096)
+                .idle_timeout(std::time::Duration::from_secs(5)),
             handler,
         );
         
@@ -115,8 +116,8 @@ impl RtmpHandler for RtmpHandlerImpl {
         ctx: &SessionContext,
         params: &ConnectParams,
     ) -> impl std::future::Future<Output = AuthResult> + Send {
-        let app = params.app.clone();
-        eprintln!("[RTMP] Connect addr={} app={}", ctx.peer_addr, app);
+        let flash_ver = params.flash_ver.as_deref().unwrap_or("?");
+        eprintln!("[RTMP] Connect - {} - {}", flash_ver, ctx.peer_addr);
         async move { AuthResult::Accept }
     }
 
@@ -127,15 +128,17 @@ impl RtmpHandler for RtmpHandlerImpl {
     ) -> impl std::future::Future<Output = AuthResult> + Send {
         let app = ctx.app.clone();
         let stream_key = params.stream_key.clone();
+        let flash_ver = ctx.connect_params.as_ref()
+            .and_then(|c| c.flash_ver.as_deref()).unwrap_or("?");
         let handler = self.clone_for_future();
-        
-        eprintln!("[RTMP] Publish addr={} app={} stream={}", ctx.peer_addr, app, stream_key);
-        
+
+        eprintln!("[RTMP] Publish - {} - {}", flash_ver, ctx.peer_addr);
+
         async move {
             handler.handle_stream_event(app, stream_key, StreamEventType::Started).await
         }
     }
-    
+
     fn on_play(
         &self,
         _ctx: &SessionContext,
@@ -144,16 +147,17 @@ impl RtmpHandler for RtmpHandlerImpl {
         // 观众连接 - 静默允许播放
         async { AuthResult::Accept }
     }
-    
+
     fn on_unpublish(&self, ctx: &StreamContext) -> impl std::future::Future<Output = ()> + Send {
         let handler = self.clone_for_future();
-        let stream_key = ctx.stream_key.clone();
-        
-        eprintln!("[RTMP] Unpublish stream={}", stream_key);
+        let flash_ver = ctx.session.connect_params.as_ref()
+            .and_then(|c| c.flash_ver.as_deref()).unwrap_or("?");
+        eprintln!("[RTMP] Unpublish - {} - {}", flash_ver, ctx.session.peer_addr);
 
         async move {
-            let mut active = handler.active_streams.lock().await;
-            active.remove(&ctx.stream_key);
+            // 清 current_stream -> on_disconnect 据此跳过
+            *handler.current_stream.lock().await = None;
+            handler.active_streams.lock().await.remove(&ctx.stream_key);
 
             let event = StreamEvent {
                 app: String::new(),
@@ -164,6 +168,31 @@ impl RtmpHandler for RtmpHandlerImpl {
             if handler.event_tx.send(event).await.is_err() {
                 eprintln!("[RTMP] Failed to send stop event");
             }
+        }
+    }
+
+    fn on_disconnect(&self, ctx: &SessionContext) -> impl std::future::Future<Output = ()> + Send {
+        let fv = ctx.connect_params.as_ref()
+            .and_then(|c| c.flash_ver.as_deref()).unwrap_or("?");
+        eprintln!("[RTMP] Disconnect - {} - {}", fv, ctx.peer_addr);
+
+        // PS5
+        let is_ps5 = fv.starts_with("PlayStation5");
+        let flash_ver = fv.to_string();
+        let addr = ctx.peer_addr.to_string();
+        let handler = self.clone_for_future();
+
+        async move {
+            if !is_ps5 { return; }
+            if handler.current_stream.lock().await.take().is_none() { return; }
+            eprintln!("[WARN] {} - {} - Abnormal disconnect -> Cleanup", flash_ver, addr);
+            handler.active_streams.lock().await.clear();
+            let event = StreamEvent {
+                app: String::new(),
+                stream_key: String::new(),
+                event_type: StreamEventType::Stopped,
+            };
+            let _ = handler.event_tx.send(event).await;
         }
     }
 }

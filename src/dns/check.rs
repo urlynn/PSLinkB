@@ -1,4 +1,4 @@
-/// DNS check
+//! DNS check
 
 #[cfg(feature = "dns-redirect")]
 mod dns_redirect_imports {

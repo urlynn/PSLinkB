@@ -1,7 +1,9 @@
 /// DNS redirect — OpenWRT DNS 重定向 / SIGHUP 重载 / 清理
 
 #[cfg(feature = "openwrt")]
-pub async fn init(domains: &[&str], target_ip: &str) {
+pub async fn init(domains: &[&str], target_ip: &str, config: &crate::config::Config) {
+    if !config.dns_redirect { return; }
+
     // 写 checking 状态
     let first_actual = crate::dns::resolve_one(domains[0]).await.unwrap_or_default();
     crate::dns::write_dns_status(true, true, target_ip, &first_actual, false);
@@ -24,12 +26,13 @@ pub async fn init(domains: &[&str], target_ip: &str) {
 /// SIGHUP 重载 DNS 配置
 #[cfg(feature = "openwrt")]
 pub async fn handle_sighup(local_ip: &str) {
-    eprintln!("[INFO] SIGHUP received - Reloading DNS config...");
-    let enabled = std::process::Command::new("uci")
-        .args(["get", "pslinkb.config.dns_redirect"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
-        .unwrap_or(false);
+    eprintln!("[INFO] SIGHUP received - Toggling DNS...");
+    let enabled = std::fs::read_to_string("/tmp/pslinkb/dns_status")
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("enabled")?.as_bool())
+        .map(|b| !b)
+        .unwrap_or(true);
 
     let domains: Vec<&str> = crate::dns::REDIRECT_DOMAINS.to_vec();
     let confdir = super::dnsmasq::ensure_confdir();
@@ -61,7 +64,8 @@ pub async fn handle_sighup(local_ip: &str) {
 
 /// 关闭时清理
 #[cfg(feature = "openwrt")]
-pub fn cleanup() {
+pub fn cleanup(config: &crate::config::Config) {
+    if !config.dns_redirect { return; }
     crate::dns::write_dns_status(true, false, "", "", false);
     if let Some(cd) = super::dnsmasq::ensure_confdir() {
         super::dnsmasq::disable_redirect(&cd);

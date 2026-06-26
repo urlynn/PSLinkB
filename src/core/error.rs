@@ -38,6 +38,13 @@ impl AppError {
     pub fn crash(role: &'static str, detail: impl Into<String>) -> Self {
         AppError::Crash(role, detail.into())
     }
+
+    pub fn code_and_message(&self) -> (i64, String) {
+        match self {
+            AppError::BiliAPI { code, message, .. } => (*code, message.clone()),
+            _ => (-1, self.to_string()),
+        }
+    }
 }
 
 // ── 自动转换（用于 ? 运算符） ──
@@ -159,7 +166,7 @@ pub fn start_live_error(code: i64, raw: &str) -> String {
 
 #[derive(Debug, Clone)]
 pub enum FfmpegExitStatus {
-    /// 正常结束（EOF / stop by user）
+    /// 正常结束 - EOF / stop by command
     Normal,
     /// system 层处理
     Error(FfmpegErrorKind),

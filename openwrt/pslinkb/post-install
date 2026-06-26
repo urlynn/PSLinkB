@@ -1,0 +1,11 @@
+#!/bin/sh
+rm -f /usr/lib/lua/luci/controller/pslinkb.lua
+rm -rf /tmp/luci-* /tmp/luci-modulecache/ /tmp/luci-indexcache*
+/etc/init.d/pslinkb enable
+/etc/init.d/rpcd restart
+/etc/init.d/uhttpd restart 2>/dev/null || /etc/init.d/nginx restart 2>/dev/null
+
+uci -q get pslinkb.service.dns_redirect >/dev/null 2>&1 && exit 0
+uci set pslinkb.service=service
+uci set pslinkb.service.dns_redirect='1'
+uci commit pslinkb

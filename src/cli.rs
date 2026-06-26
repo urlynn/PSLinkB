@@ -1,6 +1,4 @@
 //! CLI 参数定义（桌面模式）
-//!
-//! 仅在非 openwrt 模式下编译。
 
 #![cfg(feature = "cli")]
 
@@ -10,6 +8,7 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(name = "pslinkb")]
 #[command(about = "PS5 to Bilibili Live Streaming Bridge")]
+#[command(version)]
 pub struct Args {
     /// 配置文件
     #[arg(short = 'C', long)]
@@ -34,6 +33,14 @@ pub struct Args {
     /// 运行模式: auto (Default) or manual
     #[arg(short = 'm', long)]
     pub mode: Option<String>,
+
+    /// 自定义上游 DNS 服务器 (格式: IP 或 IP:端口)
+    #[arg(short = 'd', long)]
+    pub dns: Option<String>,
+
+    /// 开启调试日志输出
+    #[arg(long)]
+    pub debug: bool,
 }
 
 pub fn default_config_path() -> std::path::PathBuf {
@@ -45,7 +52,7 @@ pub fn default_config_path() -> std::path::PathBuf {
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join("pslinkb.toml")
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(unix)]
     {
         let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
         std::path::PathBuf::from(home).join(".config").join("pslinkb.toml")

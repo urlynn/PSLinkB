@@ -1,5 +1,5 @@
-/// PSLinkB Utilities
+//! PSLinkB Utilities
 
 #[cfg(feature = "channel-broadcast")]
-pub mod danmaku_formatter;
+pub mod danmulog;
 pub mod ip;
