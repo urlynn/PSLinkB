@@ -1,0 +1,5 @@
+#!/bin/sh
+uci -q get pslinkb.service.dns_redirect >/dev/null 2>&1 && exit 0
+uci set pslinkb.service=service
+uci set pslinkb.service.dns_redirect='1'
+uci commit pslinkb

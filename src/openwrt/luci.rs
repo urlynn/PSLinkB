@@ -6,6 +6,7 @@ mod imp {
 
     pub fn init() {
         let _ = std::fs::create_dir_all(TMP_DIR);
+        reset();
     }
 
     pub fn set(key: &str, value: &str) {
@@ -24,14 +25,15 @@ mod imp {
         let _ = std::fs::remove_file(format!("{}/{}", TMP_DIR, key));
     }
 
-    /// LuCI 写入 "1" 触发扫码，pslinkb 处理完后 clear
+    /// LuCI 写入 "1" 触发扫码，rust 处理完后 clear
     pub fn has_command(key: &str) -> bool {
         if read(key).as_deref() == Some("1") { clear(key); true } else { false }
     }
 
-    /// 关播重置 — 清除运行时状态，保留 user/log/source-ip/target-ip/isequal
+    /// 关播清理
+    /// qr_status 不清 - 登录完成后 Rust 退出 respawn, 保留 done 让 LuCI 读到跳转
     pub fn reset() {
-        for key in &["rtmp", "stream", "qr_url", "qr_status", "error"] {
+        for key in &["user", "rtmp", "stream", "qr_url", "error"] {
             clear(key);
         }
     }

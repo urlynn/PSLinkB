@@ -1,4 +1,4 @@
-/// PSLinkB Configuration Management
+//! PSLinkB Configuration Management
 
 use serde::{Deserialize, Serialize};
 
@@ -13,8 +13,14 @@ pub struct Config {
     pub live: LiveConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    /// CLI/Desktop: 自动 DNS 代理开关
+    #[cfg(feature = "dns-redirect")]
     #[serde(default = "default_true")]
     pub dns_proxy: bool,
+    /// OpenWRT: 自动 DNS 重定向开关 (pslinkb.service.dns_redirect)
+    #[cfg(feature = "openwrt")]
+    #[serde(default = "default_true")]
+    pub dns_redirect: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,18 +35,23 @@ pub struct LiveConfig {
     pub area_v2: String,
 
     #[serde(default)]
-    pub live_mode: crate::actors::blive::LiveMode,
+    pub live_mode: crate::core::blive::LiveMode,
 }
 
 /// 扫码登录成功后，init::ensure_cookie() 调用 Config::save_auth_cookies() 写回此段。
-/// DedeUserID__ckMd5 是 DedeUserID 的 MD5 校验值，用于避免重复计算
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuthConfig {
     #[serde(default)]
     pub cookies: Vec<CookieEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl AuthConfig {
+    pub fn csrf(&self) -> String {
+        self.cookies.iter().find(|c| c.name == "bili_jct").map(|c| c.value.clone()).unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CookieEntry {
     pub name: String,
     pub value: String,
@@ -63,7 +74,10 @@ impl Default for Config {
         Self {
             live: LiveConfig::default(),
             auth: AuthConfig::default(),
+            #[cfg(feature = "dns-redirect")]
             dns_proxy: true,
+            #[cfg(feature = "openwrt")]
+            dns_redirect: true,
         }
     }
 }
@@ -74,15 +88,7 @@ impl Default for LiveConfig {
             room_id: default_room_id(),
             title: String::new(),
             area_v2: default_area_v2(),
-            live_mode: crate::actors::blive::LiveMode::default(),
-        }
-    }
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            cookies: Vec::new(),
+            live_mode: crate::core::blive::LiveMode::default(),
         }
     }
 }
@@ -151,7 +157,7 @@ impl Config {
         room_id: Option<u64>,
         title: Option<String>,
         area: Option<String>,
-        mode: Option<crate::actors::blive::LiveMode>,
+        mode: Option<crate::core::blive::LiveMode>,
     ) {
         if let Some(id) = room_id {
             self.live.room_id = id;
@@ -190,7 +196,7 @@ impl Config {
         Ok(())
     }
 
-    /// OpenWRT: 从 /etc/config/pslinkb (UCI 格式) 读取配置
+    /// OpenWRT: 从 /etc/config/pslinkb 读取配置
     #[cfg(feature = "openwrt")]
     pub fn from_uci() -> Result<Self, AppError> {
         use std::io::BufRead;
@@ -205,17 +211,8 @@ impl Config {
                 let parts: Vec<&str> = line.splitn(3, ' ').collect();
                 if parts.len() >= 2 { section = parts[1].to_string(); }
             } else if line.starts_with("option cookie") && section == "auth" {
-                if let Some(val) = line.strip_prefix("option cookie") {
-                    let val = val.trim().trim_matches('\'').trim_matches('"');
-                    for kv in val.split("; ") {
-                        if let Some((name, value)) = kv.split_once('=') {
-                            config.auth.cookies.push(CookieEntry {
-                                name: name.to_string(),
-                                value: value.to_string(),
-                            });
-                        }
-                    }
-                }
+                // cookie 改为 uci get 读取
+                continue;
             } else if line.starts_with("option ") && !section.is_empty() {
                 if let Some(rest) = line.strip_prefix("option ") {
                     if let Some((key, val)) = rest.split_once(' ') {
@@ -225,11 +222,34 @@ impl Config {
                             ("live", "area_v2") => { config.live.area_v2 = val.to_string(); }
                             ("live", "title")   => { config.live.title = val.to_string(); }
                             ("live", "live_mode") => {
-                                if let Ok(m) = crate::actors::blive::LiveMode::from_str(val) {
+                                if let Ok(m) = crate::core::blive::LiveMode::from_str(val) {
                                     config.live.live_mode = m;
                                 }
                             }
+                            ("service", "dns_redirect") => {
+                                config.dns_redirect = val != "0";
+                            }
                             _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        // Cookie: uci get 避免转义出错
+        if let Ok(out) = std::process::Command::new("uci")
+            .args(["get", "pslinkb.auth.cookie"])
+            .output()
+        {
+            if out.status.success() {
+                let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !raw.is_empty() {
+                    config.auth.cookies.clear();
+                    for kv in raw.split("; ") {
+                        if let Some((name, value)) = kv.split_once('=') {
+                            config.auth.cookies.push(CookieEntry {
+                                name: name.to_string(),
+                                value: value.to_string(),
+                            });
                         }
                     }
                 }

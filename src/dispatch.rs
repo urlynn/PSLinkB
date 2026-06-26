@@ -5,7 +5,6 @@ use tokio::sync::mpsc;
 use crate::core::effect::Effect;
 
 /// 执行一个副作用（发送到对应 Worker channel）
-/// IRC 客户端在 main 中永恒运行，不在此处分发生死。
 pub async fn dispatch(
     effect: Effect,
     ffmpeg_tx: &mpsc::Sender<crate::system::FfmpegCmd>,
@@ -45,9 +44,24 @@ pub async fn dispatch(
                 })
                 .await;
         }
-        Effect::BilibiliStopLive { room_id } => {
+        Effect::BilibiliStopLive { room_id, client } => {
             let _ = bilibili_tx
-                .send(crate::system::BilibiliCmd::StopLive { room_id })
+                .send(crate::system::BilibiliCmd::StopLive { room_id, client })
+                .await;
+        }
+        Effect::StartFaceWatch { room_id } => {
+            let _ = bilibili_tx
+                .send(crate::system::BilibiliCmd::StartFaceWatch { room_id })
+                .await;
+        }
+        Effect::StopFaceWatch => {
+            let _ = bilibili_tx
+                .send(crate::system::BilibiliCmd::StopFaceWatch)
+                .await;
+        }
+        Effect::SyncTwitchTitle { room_id, broadcaster_id } => {
+            let _ = bilibili_tx
+                .send(crate::system::BilibiliCmd::SyncTwitchTitle { room_id, broadcaster_id })
                 .await;
         }
         Effect::StartDanmaku { room_id } => {
@@ -67,7 +81,7 @@ pub async fn dispatch(
             eprintln!("[System] {}", msg);
         }
         Effect::Restart => {
-            eprintln!("[System] Cookie 失效，2秒后重启...");
+            eprintln!("[System] Cookie 失效, 2秒后重启...");
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             std::process::exit(0);
         }

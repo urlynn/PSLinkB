@@ -1,6 +1,5 @@
-/// PSLinkB Actors — I/O workers
+//! PSLinkB Actors — I/O workers
 
-pub mod blive;
 pub mod danmaku;
 pub mod rtmp;
 pub mod irc_server;

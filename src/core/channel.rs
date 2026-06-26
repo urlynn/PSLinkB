@@ -1,15 +1,14 @@
-//! 弹幕消息通道：mpsc / broadcast 统一管道
+//! 弹幕消息通道
 
 use async_trait::async_trait;
 use blivemsg::types::Message;
 
-// 编译时检查：必须启用且仅启用一个 channel
 #[cfg(all(feature = "channel-mpsc", feature = "channel-broadcast"))]
 compile_error!("channel-mpsc and channel-broadcast are mutually exclusive. Enable only one.");
 #[cfg(not(any(feature = "channel-mpsc", feature = "channel-broadcast")))]
 compile_error!("Must enable one of: channel-mpsc, channel-broadcast");
 
-/// 弹幕通道消息 — 弹幕和通知共用一条管道
+/// 弹幕通道消息
 #[derive(Debug, Clone)]
 pub enum DanmuMessage {
     Danmaku(Message),
@@ -19,13 +18,11 @@ pub enum DanmuMessage {
 #[derive(Debug)]
 pub struct SendError;
 
-/// 统一的弹幕发送接口
 #[async_trait]
 pub trait DanmuSender: Send + Sync {
     async fn send_danmu(&self, msg: DanmuMessage) -> Result<(), SendError>;
 }
 
-/// 统一的弹幕接收接口
 #[async_trait]
 pub trait DanmuReceiver: Send + Sync {
     async fn recv_danmu(&mut self) -> Option<DanmuMessage>;
@@ -91,10 +88,7 @@ mod broadcast_impl {
     #[async_trait]
     impl DanmuReceiver for broadcast::Receiver<DanmuMessage> {
         async fn recv_danmu(&mut self) -> Option<DanmuMessage> {
-            match self.recv().await {
-                Ok(msg) => Some(msg),
-                Err(_) => None,
-            }
+            self.recv().await.ok()
         }
     }
 }

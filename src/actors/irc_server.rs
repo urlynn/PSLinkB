@@ -1,4 +1,4 @@
-/// IRC Server Actor
+//! IRC Server Actor
 
 use tokio::sync::{watch, mpsc};
 use std::sync::Arc;
@@ -31,7 +31,7 @@ impl IrcServerActor {
     pub async fn run(mut self) -> Result<(), AppError> {
         let addr = format!("0.0.0.0:{}", self.port);
         let listener = tokio::net::TcpListener::bind(&addr).await?;
-        eprintln!("[IRC:Srv] Listening on {}", addr);
+        eprintln!("[IRC:Srv] Listening - {}", addr);
 
         let writers: Arc<Mutex<Vec<(tokio::net::tcp::OwnedWriteHalf, String)>>> =
             Arc::new(Mutex::new(Vec::new()));

@@ -11,13 +11,14 @@ pub enum Event {
     /// PS5 停止推流
     RtmpUnpublish,
 
-    /// 弹幕连接成功
+    /// 弹幕库连接成功
     DanmakuReady,
 
     /// 开播成功，返回推流地址
     BilibiliLiveStarted {
         rtmp_url: String,
         stream_key: String,
+        client: crate::core::biliapi::LiveClient,
     },
     /// 关播成功
     BilibiliLiveStopped,
@@ -43,6 +44,14 @@ pub enum Event {
     BilibiliStreamTimeout {
         room_id: u64,
     },
+
+    /// 尝试开播
+    TryStartLive,
+    /// 人脸 watcher - 等待超时,
+    FaceTimeout,
+
+    /// 标题已更新
+    TitleUpdated(String),
 
     /// PS5 IRC 频道就绪
     Ps5IrcReady { 

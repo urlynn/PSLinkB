@@ -5,7 +5,8 @@ use crate::config::rtmp_url;
 use crate::core::effect::Effect;
 use crate::core::event::Event;
 use crate::core::error::start_live_error;
-use crate::actors::blive::LiveMode;
+use crate::core::blive::LiveMode;
+use crate::core::biliapi::LiveClient;
 use crate::core::state::GlobalState;
 use crate::log;
 use tokio::sync::watch;
@@ -22,6 +23,11 @@ enum State {
         app: String,
         stream_key: String,
     },
+    /// PS5 已推流 - 等人脸验证 (60024/60043), watcher 在轮询
+    WaitingFaceAuth {
+        app: String,
+        stream_key: String,
+    },
     /// 直播中 — FFmpeg 推流 + 弹幕运行中
     Live {
         app: String,
@@ -29,6 +35,7 @@ enum State {
         bili_url: String,
         bili_key: String,
         retried: bool,
+        client: LiveClient,
     },
 }
 
@@ -54,6 +61,24 @@ pub enum BilibiliCmd {
     },
     StopLive {
         room_id: u64,
+        client: LiveClient,
+    },
+    /// 启动人脸验证 watcher (1s 探测)
+    StartFaceWatch {
+        room_id: u64,
+    },
+    /// 停止人脸验证 watcher
+    StopFaceWatch,
+    /// Twitch 标题同步 B站直播间
+    SyncTwitchTitle {
+        room_id: u64,
+        broadcaster_id: String,
+    },
+    /// 更新 B站直播间信息
+    UpdateRoom {
+        room_id: u64,
+        title: Option<String>,
+        area: Option<String>,
     },
 }
 
@@ -67,7 +92,7 @@ pub enum DanmakuCmd {
 /// 系统状态机
 pub struct System {
     state: State,
-    config: Config,
+    pub(crate) config: Config,
     local_ip: String,
     state_rx: watch::Receiver<GlobalState>,
     notify_queue: Vec<String>,
@@ -107,17 +132,16 @@ impl System {
                 let app_c = app.clone();
                 let key_c = stream_key.clone();
                 crate::luci::set("rtmp", &rtmp_url(&self.local_ip, &app, &stream_key));
-                let mut effects = Vec::new();
+                let mut effects = vec![Effect::Log(format!(
+                    "Stream Url - {}",
+                    rtmp_url(&self.local_ip, &app, &stream_key)
+                ))];
 
                 if self.config.live.live_mode == LiveMode::Auto {
                     self.state = State::LivePreparing {
                         app: app_c.clone(),
                         stream_key: key_c.clone(),
                     };
-                    effects.push(Effect::Log(format!(
-                        "PS5 streaming: {}",
-                        rtmp_url(&self.local_ip, &app, &stream_key)
-                    )));
                     effects.push(Effect::BilibiliStartLive {
                         room_id: self.config.live.room_id,
                         area_v2: self.config.live.area_v2.clone(),
@@ -125,15 +149,8 @@ impl System {
                     });
                 } else {
                     self.state = State::Ps5Streaming;
-                    effects.push(Effect::Log(format!(
-                        "PS5 streaming: {}",
-                        rtmp_url(&self.local_ip, &app, &stream_key)
-                    )));
                     if self.config.live.live_mode == LiveMode::Manual {
-                        effects.push(Effect::Log(format!(
-                            "[Manual] RTMP: rtmp://127.0.0.1:1935/{}/{}",
-                            app, stream_key
-                        )));
+                        effects.push(Effect::StartDanmaku { room_id: self.config.live.room_id });
                     }
                 }
 
@@ -146,6 +163,7 @@ impl System {
             (
                 State::Ps5Streaming
                 | State::LivePreparing { .. }
+                | State::WaitingFaceAuth { .. }
                 | State::Live { .. },
                 Event::RtmpUnpublish,
             ) => {
@@ -156,7 +174,7 @@ impl System {
                     State::LivePreparing { .. } | State::Live { .. }
                 );
                 let mut effects = self.cleanup(was_live);
-                effects.push(Effect::Log("PS5 stopped - cleaning up".into()));
+                effects.push(Effect::Log("PS5 stream ended - System cleaning up".into()));
                 effects
             }
 
@@ -164,10 +182,12 @@ impl System {
             // 开播成功 -> 进入直播，启动 FFmpeg + 弹幕
             // ————————————————————————————————————————————
             (
-                State::LivePreparing { app, stream_key },
+                State::LivePreparing { app, stream_key }
+                | State::WaitingFaceAuth { app, stream_key },
                 Event::BilibiliLiveStarted {
                     rtmp_url,
                     stream_key: bilibili_key,
+                    client,
                 },
             ) => {
                 self.state = State::Live {
@@ -176,9 +196,13 @@ impl System {
                     bili_url: rtmp_url.clone(),
                     bili_key: bilibili_key.clone(),
                     retried: false,
+                    client,
                 };
+                crate::luci::set("qr_status", "done");
+                crate::luci::clear("qr_url");
 
-                vec![
+                let mut effects = vec![
+                    Effect::StopFaceWatch,
                     Effect::StartFfmpeg {
                         ps5_app: app.clone(),
                         ps5_stream_key: stream_key.clone(),
@@ -188,16 +212,29 @@ impl System {
                     Effect::StartDanmaku {
                         room_id: self.config.live.room_id,
                     },
-                ]
+                ];
+
+                // config.title 为空时用 Twitch 标题同步
+                if self.config.live.title.is_empty()
+                    && let Some(bid) = crate::core::twitch::parse_broadcaster_id(stream_key)
+                {
+                    effects.push(Effect::SyncTwitchTitle {
+                        room_id: self.config.live.room_id,
+                        broadcaster_id: bid,
+                    });
+                }
+
+                effects
             }
 
             // ————————————————————————————————————————————
-            // B站需要人脸验证 -> 保持 LivePreparing，通知 PS5
-            // BLiveManager 会自动重试开播
+            // B站需要人脸验证(60024/60043) -> 进 WaitingFaceAuth, 起人脸 watcher
             // ————————————————————————————————————————————
-            (State::LivePreparing { .. }, Event::BilibiliAuthRequired { face_auth_url }) => {
+            (State::LivePreparing { app, stream_key }, Event::BilibiliAuthRequired { face_auth_url }) => {
+                self.state = State::WaitingFaceAuth { app: app.clone(), stream_key: stream_key.clone() };
                 self.notify_queue.push("需要人脸验证".into());
                 let mut effects = vec![
+                    Effect::StartFaceWatch { room_id: self.config.live.room_id },
                     Effect::Log("需人脸验证，正在等待...".into()),
                 ];
                 if let Some(url) = face_auth_url {
@@ -205,16 +242,23 @@ impl System {
                 }
                 effects
             }
+            (State::WaitingFaceAuth { .. }, Event::BilibiliAuthRequired { .. }) => {
+                // 重试仍需验证 -> 继续等
+                vec![]
+            }
 
             // ————————————————————————————————————————————
             // B站开播失败 -> 退回 Ps5Streaming，通知 PS5
             // -101: cookie 失效 -> 通知 PS5 后重启
             // ————————————————————————————————————————————
             (
-                State::LivePreparing { .. },
+                State::LivePreparing { .. } | State::WaitingFaceAuth { .. },
                 Event::BilibiliLiveStartFailed { code, message },
             ) => {
-                let mut effects = vec![Effect::Log(format!("StartLive failed ({}): {}", code, message))];
+                let mut effects = vec![
+                    Effect::StopFaceWatch,
+                    Effect::Log(format!("StartLive failed ({}): {}", code, message)),
+                ];
 
                 if code == -101 {
                     self.state = State::Idle;
@@ -224,6 +268,28 @@ impl System {
                     self.state = State::Ps5Streaming;
                     self.notify_queue.push(format!("开播失败({}): {}", code, start_live_error(code, &message)));
                 }
+                effects
+            }
+            // ————————————————————————————————————————————
+            // 人脸 watcher: 该再试一发开播
+            // ————————————————————————————————————————————
+            (State::WaitingFaceAuth { .. }, Event::TryStartLive) => {
+                vec![Effect::BilibiliStartLive {
+                    room_id: self.config.live.room_id,
+                    area_v2: self.config.live.area_v2.clone(),
+                    title: self.title_param(),
+                }]
+            }
+            // ————————————————————————————————————————————
+            // 人脸 watcher: 3min 超时 -> 回 Idle 
+            // 踢不了 PS5, 单方面结束, Todo: 思考有没有我方结束方法, 也可能 Electron 模式再无人脸验证
+            // ————————————————————————————————————————————
+            (State::WaitingFaceAuth { .. }, Event::FaceTimeout) => {
+                crate::luci::clear("rtmp");
+                crate::luci::reset();
+                let mut effects = self.cleanup(false);
+                self.notify_queue.push("人脸验证超时, 请重新开播".into());
+                effects.push(Effect::Log("人脸验证超时 - 放弃".into()));
                 effects
             }
 
@@ -256,15 +322,20 @@ impl System {
             // 直播流状态确认/超时
             // ————————————————————————————————————————————
             (_, Event::BilibiliStreamConfirmed { .. }) => {
+                crate::luci::clear("error");
                 self.notify_queue.push("开播成功".into());
                 vec![]
             }
-            (State::Live { app, ps5_key, bili_url, bili_key, retried: false }, Event::BilibiliStreamTimeout { .. }) => {
+            (_, Event::TitleUpdated(title)) => {
+                vec![Effect::NotifyPs5(format!("直播间标题已更新为：{}", title))]
+            }
+            (State::Live { app, ps5_key, bili_url, bili_key, retried: false, client }, Event::BilibiliStreamTimeout { .. }) => {
                 log!(warn, "Bili:Live: Live stream unconfirmed - FFmpeg restream");
                 self.state = State::Live {
                     app: app.clone(), ps5_key: ps5_key.clone(),
                     bili_url: bili_url.clone(), bili_key: bili_key.clone(),
                     retried: true,
+                    client: *client,
                 };
                 self.notify_queue.push("推流重试".into());
                 vec![
@@ -287,11 +358,12 @@ impl System {
             // ————————————————————————————————————————————
             // FFmpeg 错误 — system 层统一重试一次
             // ————————————————————————————————————————————
-            (State::Live { app, ps5_key, bili_url, bili_key, retried: false }, Event::FfmpegError(status)) => {
+            (State::Live { app, ps5_key, bili_url, bili_key, retried: false, client }, Event::FfmpegError(status)) => {
                 self.state = State::Live {
                     app: app.clone(), ps5_key: ps5_key.clone(),
                     bili_url: bili_url.clone(), bili_key: bili_key.clone(),
                     retried: true,
+                    client: *client,
                 };
                 self.notify_queue.push("推流重试".into());
                 vec![
@@ -331,8 +403,7 @@ impl System {
                     self.state,
                     State::LivePreparing { .. } | State::Live { .. }
                 );
-                let effects = self.cleanup(was_live);
-                effects
+                self.cleanup(was_live)
             }
             // 无效转换 — 静默忽略
             _ => Vec::new(),
@@ -350,15 +421,23 @@ impl System {
 
     /// 关播清理：state->Idle, luci, StopFfmpeg, StopDanmaku, BilibiliStopLive
     fn cleanup(&mut self, was_live: bool) -> Vec<Effect> {
+        // 关播配对
+        let client = match &self.state {
+            State::Live { client, .. } => *client,
+            _ => LiveClient::Electron,
+        };
         self.state = State::Idle;
+        self.notify_queue.clear();
         crate::luci::set("stream", "");
         let mut effects = vec![
             Effect::StopFfmpeg,
             Effect::StopDanmaku,
+            Effect::StopFaceWatch,
         ];
         if was_live {
             effects.push(Effect::BilibiliStopLive {
                 room_id: self.config.live.room_id,
+                client,
             });
         }
         effects

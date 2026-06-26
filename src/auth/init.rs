@@ -1,4 +1,4 @@
-/// 认证初始化：cookie 验证 - IPC 状态写入 - QR 登录调度 - Room ID 获取
+//! 认证初始化：cookie 验证 - IPC 状态写入 - QR 登录调度 - Room ID 获取
 
 use std::path::Path;
 
@@ -7,32 +7,26 @@ use crate::core::biliapi::{self, UserInfo};
 use crate::core::error::AppError;
 use crate::log;
 
-/// 有效 cookie 返回字符串，无效 exec 重启
+/// 有效 cookie 返回 (cookie_string, csrf)，无效 exec 重启
 pub async fn ensure_cookie(
     config_path: &Path,
     config: &Config,
-) -> Result<String, AppError> {
-    use crate::actors::blive::LiveMode;
-
-    if config.live.live_mode != LiveMode::Auto {
-        eprintln!("[INFO] 手动模式 - 跳过认证");
-        return Ok(String::new());
-    }
-
+) -> Result<(String, String), AppError> {
     let cookie = load_cookie_string(config_path, config);
 
     if !cookie.is_empty() {
+        let csrf = config.auth.csrf();
         match verify_cookie_str(&cookie).await {
             Ok(Some(info)) => {
                 if config.live.room_id == 0 {
                     discover_and_save_room(config_path, info.uid).await;
                 }
-                return Ok(cookie);
+                return Ok((cookie, csrf));
             }
             Ok(None) => eprintln!("[WARN] Cookie 已过期"),
             Err(_) => {
                 eprintln!("[WARN] Cookie 验证失败 - 网络波动?");
-                return Ok(cookie);
+                return Ok((cookie, csrf));
             }
         }
     } else {
@@ -50,10 +44,10 @@ pub async fn ensure_cookie(
         .map(|c| format!("{}={}", c.name, c.value))
         .collect::<Vec<_>>()
         .join("; ");
-    if let Ok(Some(info)) = verify_cookie_str(&cookie_str).await {
-        if config.live.room_id == 0 {
-            discover_and_save_room(config_path, info.uid).await;
-        }
+    if let Ok(Some(info)) = verify_cookie_str(&cookie_str).await
+        && config.live.room_id == 0
+    {
+        discover_and_save_room(config_path, info.uid).await;
     }
 
     // ── exec 重启 ──

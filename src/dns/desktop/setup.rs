@@ -2,9 +2,9 @@
 
 use crate::dns::{CHECK_DOMAINS, REDIRECT_DOMAINS, check_domain, resolve, summarize, system_resolve};
 use crate::log;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 
-pub async fn auto_start(config_dns_proxy: bool, local_ip: &str) {
+pub async fn auto_start(config_dns_proxy: bool, local_ip: &str, upstream: Option<SocketAddr>) {
     if !config_dns_proxy {
         return;
     }
@@ -22,6 +22,7 @@ pub async fn auto_start(config_dns_proxy: bool, local_ip: &str) {
     let proxy = crate::dns::DnsProxy::new(
         REDIRECT_DOMAINS,
         local_ip.parse().unwrap_or(Ipv4Addr::new(127, 0, 0, 1)),
+        upstream,
     ).await;
 
     match proxy {

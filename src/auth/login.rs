@@ -1,31 +1,17 @@
-/// 扫码登录流程
+//! 扫码登录流程
 
 use crate::config::CookieEntry;
 use crate::core::error::AppError;
-use serde::Deserialize;
+use crate::core::biliapi;
 use std::path::Path;
 use std::time::Duration;
-
-// —— B站 API 响应 ——
-
-#[derive(Debug, Deserialize)]
-struct BilibiliResponse<T> { code: i64, message: String, data: Option<T> }
-
-#[derive(Debug, Deserialize)]
-struct QrCodeData { url: String, #[serde(alias = "oauth_key")] qrcode_key: String }
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct ScanStatusData { url: String, code: i64, message: String }
 
 // —— Cookie 提取 ——
 
 fn extract_cookies(url: &str) -> Vec<CookieEntry> {
     let query = url.split('?').nth(1).unwrap_or("");
     query.split('&').filter_map(|pair| {
-        let mut kv = pair.splitn(2, '=');
-        let k = kv.next()?;
-        let v = kv.next()?;
+        let (k, v) = pair.split_once('=')?;
         if matches!(k, "SESSDATA" | "bili_jct" | "buvid3" | "DedeUserID" | "DedeUserID__ckMd5") {
             Some(CookieEntry { name: k.into(), value: v.into() })
         } else { None }
@@ -43,26 +29,16 @@ async fn poll_qr(
 ) -> Result<Vec<CookieEntry>, AppError> {
     let client = reqwest::Client::new();
 
-    let qr: BilibiliResponse<QrCodeData> = client
-        .get("https://passport.bilibili.com/x/passport-login/web/qrcode/generate")
-        .send().await?.json().await?;
-    if qr.code != 0 { return Err(format!("获取二维码失败: {}", qr.message).into()); }
-    let qr = qr.data.ok_or("No QR code data")?;
+    let (qr_url, key) = biliapi::generate_qr(&client).await?;
+    show_qr(&qr_url);
 
-    show_qr(&qr.url);
-
-    let key = qr.qrcode_key;
     let mut attempts = 0u32;
     loop {
         if attempts >= 300 { return Err("二维码登录超时 (5分钟)".into()); }
         tokio::time::sleep(Duration::from_secs(1)).await;
         attempts += 1;
 
-        let status_url = format!(
-            "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key={}", key);
-        let resp: BilibiliResponse<ScanStatusData> = client.get(&status_url).send().await?.json().await?;
-        if resp.code != 0 { continue; }
-        let s = resp.data.ok_or("No status data")?;
+        let s = biliapi::poll_qr_status(&client, &key).await?;
 
         let status = match s.code {
             0     => QrStatus::Confirmed(s.url),
@@ -104,10 +80,9 @@ pub async fn scan_qr_blocking(
         |secs| {
             if secs % 30 == 0 { eprintln!("等待扫码... ({}秒)", secs); }
         },
-    ).await.map(|cookies| {
+    ).await.inspect(|_| {
         eprintln!("扫码成功！");
         eprintln!();
-        cookies
     })
 }
 

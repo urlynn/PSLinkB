@@ -1,4 +1,4 @@
-/// FFmpeg Actor
+//! FFmpeg Actor
 
 use tokio::sync::{broadcast, mpsc};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::core::event::Event;
 use crate::core::error::{AppError, FfmpegExitStatus, FfmpegErrorKind};
 use crate::log;
+use crate::dlog;
 
 // ── 共享类型 ──
 
@@ -34,7 +35,7 @@ impl FfmpegActor {
             tokio::select! {
                 _ = shutdown_rx.recv() => {
                     self.streaming_flag.store(false, Ordering::SeqCst);
-                    eprintln!("[FFmpeg] Received shutdown signal");
+                    eprintln!("[FFmpeg] Stop signal received -> Stopped");
                     break;
                 }
                 cmd = self.cmd_rx.recv() => {
@@ -53,7 +54,7 @@ impl FfmpegActor {
                                     &input_url, &output_url, &flag, &mut inner_shutdown,
                                 ) {
                                     Err(FfmpegExitStatus::Normal) => {
-                                        eprintln!("[FFmpeg] Streaming completed");
+                                        dlog!("[FFmpeg] Streaming completed");
                                     }
                                     Err(status) => {
                                         log!(error, "FFmpeg: Streaming error");
@@ -66,12 +67,11 @@ impl FfmpegActor {
                         Some(FfmpegCommand::Stop) => {
                             self.streaming_flag.store(false, Ordering::SeqCst);
                         }
-                        None => break,
+                        None => { break; }
                     }
                 }
             }
         }
-        eprintln!("[FFmpeg] Stopped");
         Ok(())
     }
 
@@ -132,32 +132,35 @@ mod ffi {
         flag: &Arc<AtomicBool>,
         shutdown_rx: &mut broadcast::Receiver<()>,
     ) -> Result<(), AppError> {
+        ffmpeg::init(); // 日志级别
         eprintln!("[FFmpeg] ffmpeg -i {} -c copy -f flv {}", input_url, output_url);
-        let ictx = InputContext::open(input_url)?;
+        // 主动停止时 av_read_frame 立刻 AVERROR_EXIT 返回
+        let ictx = InputContext::open(input_url, Arc::as_ptr(flag) as *mut std::ffi::c_void)?;
         let stream_count = ictx.stream_count();
 
         let mut descs = Vec::new();
         for i in 0..stream_count {
-            if let Some(s) = ictx.stream(i) {
-                if let Some(cp) = ffmpeg::stream_codecpar(s) {
+            if let Some(s) = ictx.stream(i)
+                && let Some(cp) = ffmpeg::stream_codecpar(s)
+            {
                     let ct = ffmpeg::codec_type(cp);
                     let cid = ffmpeg::codec_id(cp);
                     let kind = if ct == AVMediaType::AVMEDIA_TYPE_VIDEO { "Video:" }
                          else if ct == AVMediaType::AVMEDIA_TYPE_AUDIO { "Audio:" }
                          else { "?: " };
                     descs.push(format!("#{} {} {}", i, kind, ffmpeg::codec_name(cid)));
-                }
             }
         }
-        eprintln!("[FFmpeg] {} stream(s) - {} - streaming...", stream_count, descs.join(" | "));
+        eprintln!("[FFmpeg] {} stream(s) - {} - Streaming", stream_count, descs.join(" | "));
 
         let mut octx = OutputContext::create(output_url, "flv")?;
         let mut stream_map: Vec<i32> = vec![-1; stream_count as usize];
         let mut mapped = 0i32;
 
         for i in 0..stream_count {
-            if let Some(s) = ictx.stream(i) {
-                if let Some(cp) = ffmpeg::stream_codecpar(s) {
+            if let Some(s) = ictx.stream(i)
+                && let Some(cp) = ffmpeg::stream_codecpar(s)
+            {
                     let ct = ffmpeg::codec_type(cp);
                     if ct == AVMediaType::AVMEDIA_TYPE_VIDEO || ct == AVMediaType::AVMEDIA_TYPE_AUDIO
                     {
@@ -165,7 +168,6 @@ mod ffi {
                         stream_map[i as usize] = mapped;
                         mapped += 1;
                     }
-                }
             }
         }
 
@@ -187,13 +189,13 @@ mod ffi {
                     ffmpeg::pkt_unref(pkt);
                     ffmpeg::pkt_free(pkt);
                 }
-                Ok(None) => break,
+                Ok(None) => { eprintln!("[FFmpeg] Input ended -> Stopped"); break; }
                 Err(ref e) if e.to_string().contains("End of file") => break,
                 Err(e) => return Err(e),
             }
         }
 
-        octx.write_trailer()?;
+        let _ = octx.write_trailer();
         let e = start_time.elapsed().as_secs_f64().max(0.001);
         eprintln!("[FFmpeg] Done: {} packets in {:.1}s ({:.0} pkt/s)", packet_count, e, packet_count as f64 / e);
         Ok(())
@@ -214,7 +216,7 @@ mod external {
             let dir = exe.parent().unwrap();
             #[cfg(windows)]
             let name = "pslinkb-stream.exe";
-            #[cfg(not(windows))]
+            #[cfg(unix)]
             let name = "pslinkb-stream";
             let path = dir.join(name);
             if path.exists() { return path.display().to_string(); }
