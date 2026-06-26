@@ -2,9 +2,6 @@
 // cc crate 仅在 FFI 模式需要
 
 #[cfg(feature = "ffi-ffmpeg")]
-use cc;
-
-#[cfg(feature = "ffi-ffmpeg")]
 use std::{env, path::PathBuf, process};
 
 #[cfg(feature = "ffi-ffmpeg")]

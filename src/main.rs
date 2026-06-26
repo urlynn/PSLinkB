@@ -12,9 +12,6 @@ use pslinkb::run::{Channels, run_loop};
 use pslinkb::{luci, spawn};
 #[cfg(feature = "cli")]
 use pslinkb::log;
-#[cfg(feature = "cli")]
-#[allow(unused_imports)]
-use pslinkb::cli;
 
 use tokio::sync::mpsc;
 
@@ -24,6 +21,26 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
+    // --version - openwrt 专用 
+    #[cfg(feature = "openwrt")]
+    if std::env::args().any(|a| a == "--version" || a == "-v") {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        std::process::exit(0);
+    }
+
+    // ── 解析 CLI 参数 ──
+    #[cfg(feature = "cli")]
+    let args = {
+        use clap::Parser;
+        pslinkb::cli::Args::parse()
+    };
+
+    // ── 运行时调试日志开关 ──
+    #[cfg(feature = "cli")]
+    if args.debug {
+        pslinkb::log::set_debug_enabled(true);
+    }
+
     // Ring crypto provider
     rustls::crypto::ring::default_provider().install_default()
         .expect("TLS provider init failed");
@@ -34,7 +51,7 @@ async fn main() -> Result<(), AppError> {
 
     // ── 加载配置 ──
     #[cfg(feature = "cli")]
-    let (config, config_path, cli_cookie) = load_config()?;
+    let (config, config_path, cli_cookie) = load_config(&args)?;
     #[cfg(feature = "openwrt")]
     let (config, config_path) = load_config()?;
 
@@ -57,18 +74,27 @@ async fn main() -> Result<(), AppError> {
         }
     }
 
+    // ── IPC 目录 + 清理 ──
+    luci::init();
+
     // ── 认证（放行 or exec 重启）──
-    let cookie_string = ensure_cookie(&config_path, &config).await?;
+    let (cookie_string, csrf) = ensure_cookie(&config_path, &config).await?;
 
     // ── DNS 重定向检测 ──
     let local_ip = pslinkb::utils::ip::local_ip();
 
     #[cfg(feature = "dns-redirect")]
-    pslinkb::dns::auto_start(config.dns_proxy, &local_ip).await;
+    {
+        let dns_override = parse_dns_override(
+            #[cfg(feature = "cli")]
+            args.dns.as_deref(),
+        );
+        pslinkb::dns::auto_start(config.dns_proxy, &local_ip, dns_override).await;
+    }
 
     #[cfg(feature = "openwrt")]
     {
-        pslinkb::dns::redirect::init(pslinkb::dns::REDIRECT_DOMAINS, &local_ip).await;
+        pslinkb::dns::redirect::init(pslinkb::dns::REDIRECT_DOMAINS, &local_ip, &config).await;
     }
 
     // ── 重新加载配置 ──
@@ -77,17 +103,20 @@ async fn main() -> Result<(), AppError> {
     #[cfg(feature = "openwrt")]
     let config = Config::from_uci()?;
 
-    eprintln!();
-    eprintln!("╔══════════════════════════════════════╗");
-    eprintln!("║  PSLinkB v{}                      ║", env!("CARGO_PKG_VERSION"));
-    eprintln!("║  PS5 -> Bilibili Live Bridge         ║");
-    eprintln!("╚══════════════════════════════════════╝");
-    eprintln!();
+    #[cfg(feature = "cli")]
+    {
+        eprintln!();
+        eprintln!("╔══════════════════════════════════════╗");
+        eprintln!("║  PSLinkB v{}                      ║", env!("CARGO_PKG_VERSION"));
+        eprintln!("║  PS5 -> Bilibili Live Bridge         ║");
+        eprintln!("╚══════════════════════════════════════╝");
+        eprintln!();
+    }
+    #[cfg(feature = "openwrt")]
+    eprintln!("[INFO] PSLinkB v{}", env!("CARGO_PKG_VERSION"));
     eprintln!("[INFO] RTMP: {} | IRC: {} | Room: {}",
         RTMP_PORT, IRC_PORT, config.live.room_id);
     eprintln!();
-
-    luci::init();
 
     // ── 创建通道 ──
     let (event_tx, event_rx) = mpsc::channel::<Event>(256);
@@ -121,12 +150,12 @@ async fn main() -> Result<(), AppError> {
 
     // ── 启动按需 workers ──
     spawn::spawn_ffmpeg_worker(ffmpeg_rx, event_tx.clone());
-    spawn::spawn_bilibili_worker(bilibili_rx, event_tx.clone(), cookie_string.clone());
+    spawn::spawn_bililive_cmds(bilibili_rx, event_tx.clone(), cookie_string.clone(), csrf.clone());
     spawn::spawn_danmaku_worker(danmaku_cmd_rx, danmaku_tx.clone(), cookie_string, event_tx.clone());
 
     // ── 主事件循环 ──
     let ch = Channels { ffmpeg: ffmpeg_tx, bilibili: bilibili_tx, danmaku: danmaku_cmd_tx, irc_notify: irc_notify_tx };
-    run_loop(system, event_rx, ch, &local_ip).await
+    run_loop(system, event_rx, ch, &local_ip, config).await
 }
 
 // ————————————————————————————————————————————————————————————
@@ -134,12 +163,10 @@ async fn main() -> Result<(), AppError> {
 // ————————————————————————————————————————————————————————————
 
 #[cfg(feature = "cli")]
-fn load_config() -> Result<(Config, std::path::PathBuf, Option<String>), AppError> {
-    use clap::Parser;
+fn load_config(args: &pslinkb::cli::Args) -> Result<(Config, std::path::PathBuf, Option<String>), AppError> {
     use std::path::PathBuf;
 
-    let args = pslinkb::cli::Args::parse();
-    let config_path = args.config
+    let config_path = args.config.clone()
         .map(PathBuf::from)
         .unwrap_or_else(pslinkb::cli::default_config_path);
 
@@ -160,12 +187,12 @@ fn load_config() -> Result<(Config, std::path::PathBuf, Option<String>), AppErro
     let mut config = config;
     config.apply_cli_overrides(
         args.room_id,
-        args.title,
-        args.area,
-        args.mode.and_then(|s| s.parse().ok()),
+        args.title.clone(),
+        args.area.clone(),
+        args.mode.as_ref().and_then(|s| s.parse().ok()),
     );
 
-    Ok((config, config_path, args.cookie))
+    Ok((config, config_path, args.cookie.clone()))
 }
 
 #[cfg(feature = "openwrt")]
@@ -174,4 +201,22 @@ fn load_config() -> Result<(Config, std::path::PathBuf), AppError> {
     let config = Config::from_uci()?;
     let path = std::path::PathBuf::from("/etc/pslinkb.toml");
     Ok((config, path))
+}
+
+// ────────────────────────────────────────────────────────────
+// DNS override 解析
+// ────────────────────────────────────────────────────────────
+
+#[cfg(feature = "dns-redirect")]
+fn parse_dns_override(dns: Option<&str>) -> Option<std::net::SocketAddr> {
+    use std::net::{Ipv4Addr, SocketAddr, IpAddr};
+    let input = dns?;
+    if let Some((ip_part, port_part)) = input.split_once(':') {
+        let ip: Ipv4Addr = ip_part.parse().ok()?;
+        let port: u16 = port_part.parse().ok()?;
+        Some(SocketAddr::new(IpAddr::V4(ip), port))
+    } else {
+        let ip: Ipv4Addr = input.parse().ok()?;
+        Some(SocketAddr::new(IpAddr::V4(ip), 53))
+    }
 }

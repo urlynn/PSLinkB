@@ -1,4 +1,4 @@
-/// Danmaku Formatter — 独立的弹幕日志组件（舍不得删）
+//! Danmaku Formatter — 独立的弹幕日志组件（舍不得删）
 
 use crate::core::channel::{DanmuMessage, DanmuReceiver};
 use crate::core::error::AppError;
@@ -18,7 +18,7 @@ impl DanmakuFormatter {
             match self.danmu_rx.recv_danmu().await {
                 Some(DanmuMessage::Danmaku(msg)) => {
                     if let Some(formatted) = Self::format_danmaku(&msg) {
-                        eprintln!("[Danmu:Fmt] {}", formatted);
+                        eprintln!("[Danmaku:Fmt] {}", formatted);
                     }
                 }
                 Some(DanmuMessage::Notify(_)) => {

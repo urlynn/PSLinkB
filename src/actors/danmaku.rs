@@ -1,4 +1,4 @@
-/// Danmu Worker
+//! Danmu Worker
 
 use blivemsg::BliveClient;
 use futures_util::StreamExt;

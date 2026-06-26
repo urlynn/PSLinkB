@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use tokio::net::UdpSocket;
 
+use crate::dlog;
+
 use hickory_proto::op::{Message, MessageType, OpCode, ResponseCode};
 use hickory_proto::rr::{RData, Record, RecordType};
 use hickory_proto::rr::rdata::A;
@@ -36,12 +38,11 @@ fn detect_upstream() -> SocketAddr {
     {
         if let Ok(content) = std::fs::read_to_string("/etc/resolv.conf") {
             for line in content.lines() {
-                if line.starts_with("nameserver") {
-                    if let Some(ip) = line.split_whitespace().nth(1) {
-                        if let Ok(addr) = ip.parse::<Ipv4Addr>() {
-                            return SocketAddr::new(std::net::IpAddr::V4(addr), 53);
-                        }
-                    }
+                if line.starts_with("nameserver")
+                    && let Some(ip) = line.split_whitespace().nth(1)
+                    && let Ok(addr) = ip.parse::<Ipv4Addr>()
+                {
+                    return SocketAddr::new(std::net::IpAddr::V4(addr), 53);
                 }
             }
         }
@@ -53,10 +54,12 @@ impl DnsProxy {
     pub async fn new(
         domains: &[&str],
         target_ip: Ipv4Addr,
+        upstream: Option<SocketAddr>,
     ) -> Result<Self, std::io::Error> {
         let socket = UdpSocket::bind("0.0.0.0:53").await?;
         let redirect_domains: HashSet<String> = domains.iter().map(|d| d.to_string()).collect();
-        let upstream = detect_upstream();
+        let upstream = upstream.unwrap_or_else(detect_upstream);
+        dlog!("DNS: 上游 {}", upstream);
         Ok(Self { socket, redirect_domains, target_ip, upstream })
     }
 
@@ -76,11 +79,13 @@ impl DnsProxy {
             };
             let name = query.name().to_utf8();
             let name = name.trim_end_matches('.');
+            let qtype = query.query_type();
 
             let should_redirect = self.redirect_domains.iter()
                 .any(|d| name == d || name.ends_with(&format!(".{}", d)));
 
-            if should_redirect && query.query_type() == RecordType::A {
+            if should_redirect && qtype == RecordType::A {
+                dlog!("[DNS] {} -> {} ({:?}) REDIRECT -> {}", src.ip(), name, qtype, self.target_ip);
                 let mut response = Message::new(request.id, MessageType::Response, OpCode::Query);
                 response.queries.push(query.clone());
                 response.metadata.authoritative = true;
@@ -93,6 +98,7 @@ impl DnsProxy {
                     let _ = self.socket.send_to(&resp_bytes, src).await;
                 }
             } else {
+                dlog!("[DNS] {} -> {} ({:?}) FORWARD -> {}", src.ip(), name, qtype, self.upstream);
                 let upstream_sock = match std::net::UdpSocket::bind("0.0.0.0:0") {
                     Ok(s) => {
                         s.set_read_timeout(Some(std::time::Duration::from_secs(3))).ok();

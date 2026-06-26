@@ -1,9 +1,9 @@
-/// IRC Client Worker
+//! IRC Client Worker
 
 use crate::core::channel::{DanmuMessage, DanmuReceiver};
 use crate::core::error::AppError;
 use crate::core::state::GlobalState;
-#[allow(unused_imports)]
+#[cfg(feature = "channel-mpsc")]
 use crate::log;
 use blivemsg::types::Message;
 use tokio::io::AsyncWriteExt;
@@ -68,17 +68,17 @@ impl IrcClientWorker {
                         match msg {
                             Some(danmu_msg) => {
                                 #[cfg(feature = "channel-mpsc")]
-                                if self.first {
-                                    if let DanmuMessage::Danmaku(Message::Danmu(ref d)) = danmu_msg {
-                                        self.first = false;
-                                        log!(ok, "[Danmu] {}: {} - ✓ 首条弹幕工作正常", d.username, d.content);
-                                    }
+                                if self.first
+                                    && let DanmuMessage::Danmaku(Message::Danmu(ref d)) = danmu_msg
+                                {
+                                    self.first = false;
+                                    log!(ok, "[Danmaku] {}: {} - ✓ 首条弹幕工作正常", d.username, d.content);
                                 }
-                                if let Some(irc_msg) = Self::format_message(&danmu_msg, &channel_name) {
-                                    if writer.write_all(irc_msg.as_bytes()).await.is_err() {
-                                        eprintln!("[IRC:Cli] Write failed - PS5 disconnected");
-                                        break;
-                                    }
+                                if let Some(irc_msg) = Self::format_message(&danmu_msg, &channel_name)
+                                    && writer.write_all(irc_msg.as_bytes()).await.is_err()
+                                {
+                                    eprintln!("[IRC:Cli] Write failed - PS5 disconnected");
+                                    break;
                                 }
                             }
                             None => {

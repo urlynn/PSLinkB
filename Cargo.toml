@@ -1,6 +1,6 @@
 [package]
 name = "pslinkb"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 description = "PS5 to Bilibili Live Streaming Bridge"
 license = "MIT OR Apache-2.0"
@@ -85,6 +85,9 @@ ffi-ffmpeg = []
 
 # DNS 重定向
 dns-redirect = ["hickory-proto"]
+
+# 调试日志
+debug-log = []
 
 [build-dependencies]
 cc = "1"

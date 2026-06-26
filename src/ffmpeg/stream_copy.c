@@ -7,11 +7,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef STREAM_VERSION
+#define STREAM_VERSION "0.1.1"
+#endif
+
 static char errbuf[256];
 
 int main(int argc, char **argv) {
+    if (argc == 2 && (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0)) {
+        printf("pslinkb-stream %s\n", STREAM_VERSION);
+        return 0;
+    }
+
     if (argc != 3) {
-        fprintf(stderr, "Usage: %s <input_url> <output_url>\n", argv[0]);
+        fprintf(stderr, "Usage: %s [-v] <input_url> <output_url>\n", argv[0]);
         return 1;
     }
 

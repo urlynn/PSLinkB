@@ -25,7 +25,7 @@ async fn dispatch_effects(system: &mut System, event: Event, ch: &Channels) {
 
 async fn do_shutdown(system: &mut System, ch: &Channels) {
     #[cfg(feature = "openwrt")]
-    crate::dns::redirect::cleanup();
+    crate::dns::redirect::cleanup(&system.config);
     dispatch_effects(system, Event::Shutdown, ch).await;
 }
 
@@ -34,13 +34,14 @@ pub async fn run_loop(
     mut event_rx: mpsc::Receiver<Event>,
     ch: Channels,
     #[allow(unused_variables)] local_ip: &str,
+    #[allow(unused_variables)] base_config: crate::config::Config,
 ) -> Result<(), AppError> {
     #[cfg(feature = "openwrt")]
     let mut sighup = signal(SignalKind::hangup()).expect("无法注册 SIGHUP");
     #[cfg(unix)]
     let mut sigterm = signal(SignalKind::terminate()).expect("无法注册 SIGTERM");
 
-    // SIGHUP 独立 task：避免被 tokio::select! 抢占
+    // SIGHUP 独立 task
     #[cfg(feature = "openwrt")]
     let (hup_tx, mut hup_rx) = tokio::sync::mpsc::unbounded_channel();
     #[cfg(feature = "openwrt")]
@@ -50,6 +51,38 @@ pub async fn run_loop(
             let _ = hup_tx.send(());
         }
     });
+
+    // SIGUSR1：uci 改动 -> 热更新类
+    #[cfg(feature = "openwrt")]
+    {
+        let mut sigusr1 = signal(SignalKind::user_defined1()).expect("无法注册 SIGUSR1");
+        let bili_tx = ch.bilibili.clone();
+        let mut base = base_config;
+        tokio::spawn(async move {
+            loop {
+                sigusr1.recv().await;
+                // 等 LuCI 写盘落地
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                let Ok(cfg) = crate::config::Config::from_uci() else { continue };
+                if cfg.auth.cookies != base.auth.cookies
+                    || cfg.live.room_id != base.live.room_id
+                    || cfg.live.live_mode != base.live.live_mode
+                {
+                    log!(info, "[INFO] 配置变更，重启中...");
+                    std::process::exit(0);
+                }
+                if cfg.live.title != base.live.title || cfg.live.area_v2 != base.live.area_v2 {
+                    let title = if cfg.live.title.is_empty() { None } else { Some(cfg.live.title.clone()) };
+                    let _ = bili_tx.send(BilibiliCmd::UpdateRoom {
+                        room_id: cfg.live.room_id,
+                        title,
+                        area: Some(cfg.live.area_v2.clone()),
+                    }).await;
+                }
+                base = cfg;
+            }
+        });
+    }
 
     log!(ok, "[INFO] ✓ 初始化完成 - PS5 按下直播键即可开播");
 
@@ -89,7 +122,7 @@ pub async fn run_loop(
             }
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         tokio::select! {
             event = event_rx.recv() => {
                 match event {

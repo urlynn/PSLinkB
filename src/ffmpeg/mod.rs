@@ -64,6 +64,7 @@ mod ffi_impl {
     use self::ffi_types::*;
 
     unsafe extern "C" {
+        fn avformat_alloc_context() -> *mut AVFormatContext;
         fn avformat_open_input(ps: *mut *mut AVFormatContext, url: *const c_char, _: *mut c_void, _: *mut c_void) -> c_int;
         fn avformat_find_stream_info(ctx: *mut AVFormatContext, _: *mut c_void) -> c_int;
         fn avformat_close_input(ps: *mut *mut AVFormatContext);
@@ -80,6 +81,7 @@ mod ffi_impl {
         fn av_interleaved_write_frame(ctx: *mut AVFormatContext, pkt: *mut AVPacket) -> c_int;
         fn avcodec_parameters_copy(dst: *mut AVCodecParameters, src: *const AVCodecParameters) -> c_int;
         fn av_strerror(errnum: c_int, errbuf: *mut u8, errbuf_size: usize) -> c_int;
+        fn av_log_set_level(level: c_int);
     }
 
     unsafe extern "C" {
@@ -95,9 +97,15 @@ mod ffi_impl {
         fn ps_codec_type(cp: *const AVCodecParameters) -> AVMediaType;
         fn ps_codec_id(cp: *const AVCodecParameters) -> c_int;
         fn ps_avio_open(ctx: *mut AVFormatContext, url: *const c_char) -> c_int;
+        fn ps_set_interrupt(ctx: *mut AVFormatContext, opaque: *mut c_void);
     }
 
-    pub fn init() { /* noop */ }
+    /// 设 FFmpeg 内部日志级别
+    pub fn init() {
+        // AV_LOG_INFO=32, AV_LOG_ERROR=16
+        let level = if cfg!(any(debug_assertions, feature = "debug-log")) { 32 } else { 16 };
+        unsafe { av_log_set_level(level); }
+    }
 
     pub fn strerror(err: c_int) -> String {
         let mut buf = vec![0i8; 256];
@@ -150,9 +158,12 @@ mod ffi_impl {
     }
 
     impl InputContext {
-        pub fn open(url: &str) -> Result<Self, AppError> {
+        /// 主动停止时 av_read_frame 立刻以 AVERROR_EXIT 返回
+        pub fn open(url: &str, interrupt_opaque: *mut c_void) -> Result<Self, AppError> {
             let c_url = CString::new(url)?;
-            let mut ctx: *mut AVFormatContext = ptr::null_mut();
+            let mut ctx = unsafe { avformat_alloc_context() };
+            if ctx.is_null() { return Err("avformat_alloc_context failed".into()); }
+            unsafe { ps_set_interrupt(ctx, interrupt_opaque); }
             check(unsafe { avformat_open_input(&mut ctx, c_url.as_ptr(), ptr::null_mut(), ptr::null_mut()) })?;
             check(unsafe { avformat_find_stream_info(ctx, ptr::null_mut()) })?;
             Ok(Self { ptr: ctx })
@@ -166,7 +177,10 @@ mod ffi_impl {
             let ret = unsafe { av_read_frame(self.ptr, pkt) };
             if ret < 0 {
                 unsafe { av_packet_free(&mut (pkt as *mut *mut AVPacket as *mut _)); }
-                if ret == -541478725 { return Ok(None); }
+                // -541478725 = AVERROR_EOF(流正常结束); -1414092869 = AVERROR_EXIT(中断回调=主动停) -> 干净结束
+                if ret == -541478725 || ret == -1414092869 {
+                    return Ok(None);
+                }
                 return Err(strerror(ret).into());
             }
             Ok(Some(pkt))

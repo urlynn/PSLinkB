@@ -109,18 +109,22 @@ pub fn spawn_ffmpeg_worker(mut cmd_rx: mpsc::Receiver<crate::system::FfmpegCmd>,
     });
 }
 
-pub fn spawn_bilibili_worker(
+pub fn spawn_bililive_cmds(
     mut cmd_rx: mpsc::Receiver<crate::system::BilibiliCmd>,
     event_tx: mpsc::Sender<Event>,
     cookie_string: String,
+    csrf: String,
 ) {
-    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    use std::sync::atomic::Ordering;
+    // 人脸 watcher 取消标志
+    let face_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     tokio::spawn(async move {
         while let Some(cmd) = cmd_rx.recv().await {
             let cookie_c = cookie_string.clone();
+            let csrf_c = csrf.clone();
             let event_tx_c = event_tx.clone();
-            let cancel_c = cancel.clone();
+            let face_cancel_c = face_cancel.clone();
 
             tokio::spawn(async move {
                 match cmd {
@@ -129,12 +133,23 @@ pub fn spawn_bilibili_worker(
                         area_v2,
                         title,
                     } => {
-                        cancel_c.store(false, std::sync::atomic::Ordering::Relaxed);
-                        execute_start_live(room_id, area_v2, title, cookie_c, event_tx_c, cancel_c).await;
+                        execute_start_live(room_id, area_v2, title, cookie_c, csrf_c, event_tx_c).await;
                     }
-                    crate::system::BilibiliCmd::StopLive { room_id } => {
-                        cancel_c.store(true, std::sync::atomic::Ordering::Relaxed);
-                        execute_stop_live(room_id, cookie_c, event_tx_c).await;
+                    crate::system::BilibiliCmd::StopLive { room_id, client } => {
+                        execute_stop_live(room_id, client, cookie_c, csrf_c, event_tx_c).await;
+                    }
+                    crate::system::BilibiliCmd::StartFaceWatch { room_id } => {
+                        face_cancel_c.store(false, Ordering::Relaxed);
+                        face_watcher(room_id, cookie_c, csrf_c, event_tx_c, face_cancel_c).await;
+                    }
+                    crate::system::BilibiliCmd::StopFaceWatch => {
+                        face_cancel_c.store(true, Ordering::Relaxed);
+                    }
+                    crate::system::BilibiliCmd::SyncTwitchTitle { room_id, broadcaster_id } => {
+                        sync_twitch_title(room_id, broadcaster_id, cookie_c, csrf_c, event_tx_c).await;
+                    }
+                    crate::system::BilibiliCmd::UpdateRoom { room_id, title, area } => {
+                        update_room_info(room_id, title, area, cookie_c, csrf_c, event_tx_c).await;
                     }
                 }
             });
@@ -142,116 +157,114 @@ pub fn spawn_bilibili_worker(
     });
 }
 
+/// 人脸验证 watcher: 1s 探测 -> Verified/10s fallback 发 TryStartLive; 3min 发 FaceTimeout。
+async fn face_watcher(
+    room_id: u64,
+    cookie: String,
+    csrf: String,
+    event_tx: mpsc::Sender<Event>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::Ordering;
+    let client = reqwest::Client::new();
+    let start = tokio::time::Instant::now();
+    let mut fallback = false;
+
+    loop {
+        if cancel.load(Ordering::Relaxed) { break; }
+        if start.elapsed().as_secs_f64() > 180.0 {
+            let _ = event_tx.send(Event::FaceTimeout).await;
+            break;
+        }
+        if !fallback {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            match crate::core::biliapi::check_face_status(&client, &cookie, &csrf, room_id).await {
+                crate::core::biliapi::FaceStatus::Verified => {
+                    let _ = event_tx.send(Event::TryStartLive).await;
+                    fallback = true; // 验证已过
+                }
+                crate::core::biliapi::FaceStatus::NotYet => {}
+                crate::core::biliapi::FaceStatus::Abnormal(payload) => {
+                    log!(warn, "Bili:Live: 人脸状态检测异常 - {}", payload);
+                    fallback = true;
+                }
+            }
+        } else {
+            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            let _ = event_tx.send(Event::TryStartLive).await;
+        }
+    }
+}
+
 pub async fn execute_start_live(
     room_id: u64,
     area_v2: String,
     title: Option<String>,
     cookie: String,
+    csrf: String,
     event_tx: mpsc::Sender<Event>,
-    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
-    use crate::actors::blive::{BLiveManager, LiveCommand, LiveEvent};
+    use crate::core::blive::{self, StartOutcome};
 
-    let (cmd_tx, cmd_rx) = mpsc::channel(8);
-    let (ev_tx, mut ev_rx) = mpsc::channel(8);
-    let manager = BLiveManager::new(cmd_rx, ev_tx, cookie, cancel);
-    let (sd_tx, _) = tokio::sync::broadcast::channel(1);
-
-    tokio::spawn(async move {
-        if let Err(e) = manager.run(sd_tx.subscribe()).await {
-            log!(error, "Bili:Live: {}", AppError::crash("Manager", e.to_string()));
+    match blive::try_start_live(&cookie, &csrf, room_id, &area_v2, title.as_deref()).await {
+        StartOutcome::Started { rtmp_url, stream_key, client } => {
+            let _ = event_tx.send(Event::BilibiliLiveStarted { rtmp_url, stream_key, client }).await;
+            // 启动流状态监听
+            let ev_tx2 = event_tx.clone();
+            tokio::spawn(async move { monitor_stream_status(room_id, ev_tx2).await; });
         }
-    });
-
-    let _ = cmd_tx
-        .send(LiveCommand::Start {
-            room_id,
-            area_v2,
-            title,
-        })
-        .await;
-
-    while let Some(ev) = ev_rx.recv().await {
-        match ev {
-            LiveEvent::Started {
-                rtmp_url,
-                stream_key,
-            } => {
-                let _ = event_tx
-                    .send(Event::BilibiliLiveStarted {
-                        rtmp_url: rtmp_url.clone(),
-                        stream_key: stream_key.clone(),
-                    })
-                    .await;
-                // 启动流状态监听
-                let ev_tx2 = event_tx.clone();
-                tokio::spawn(async move {
-                    monitor_stream_status(room_id, ev_tx2).await;
-                });
-                break;
-            }
-            LiveEvent::AuthRequired { face_auth_url } => {
-                let _ = event_tx
-                    .send(Event::BilibiliAuthRequired { face_auth_url })
-                    .await;
-            }
-            LiveEvent::StartFailed {
-                error_code,
-                message,
-            } => {
-                let _ = event_tx
-                    .send(Event::BilibiliLiveStartFailed {
-                        code: error_code,
-                        message,
-                    })
-                    .await;
-                break;
-            }
-            _ => {}
+        StartOutcome::AuthRequired { face_auth_url } => {
+            let _ = event_tx.send(Event::BilibiliAuthRequired { face_auth_url }).await;
+        }
+        StartOutcome::Failed { code, message } => {
+            let _ = event_tx.send(Event::BilibiliLiveStartFailed { code, message }).await;
         }
     }
 }
 
 pub async fn execute_stop_live(
     room_id: u64,
+    client: crate::core::biliapi::LiveClient,
     cookie: String,
+    csrf: String,
     event_tx: mpsc::Sender<Event>,
 ) {
-    use crate::actors::blive::{BLiveManager, LiveCommand, LiveEvent};
+    use crate::core::blive;
 
-    let (cmd_tx, cmd_rx) = mpsc::channel(8);
-    let (ev_tx, mut ev_rx) = mpsc::channel(8);
-    let manager = BLiveManager::new(cmd_rx, ev_tx, cookie, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
-    let (sd_tx, _) = tokio::sync::broadcast::channel(1);
+    match blive::try_stop_live(&cookie, &csrf, room_id, client).await {
+        Ok(()) => { let _ = event_tx.send(Event::BilibiliLiveStopped).await; }
+        Err((code, message)) => { let _ = event_tx.send(Event::BilibiliLiveStopFailed { code, message }).await; }
+    }
+}
 
-    tokio::spawn(async move {
-        if let Err(e) = manager.run(sd_tx.subscribe()).await {
-            log!(error, "Bili:Live: {}", AppError::crash("Manager", e.to_string()));
+/// Twitch 标题同步 B站直播间
+async fn sync_twitch_title(
+    room_id: u64,
+    broadcaster_id: String,
+    cookie: String,
+    csrf: String,
+    event_tx: mpsc::Sender<Event>,
+) {
+    let Some(title) = crate::core::twitch::fetch_live_title(&broadcaster_id).await else { return };
+    update_room_info(room_id, Some(title), None, cookie, csrf, event_tx).await;
+}
+
+/// 更新直播间标题
+async fn update_room_info(
+    room_id: u64,
+    title: Option<String>,
+    area: Option<String>,
+    cookie: String,
+    csrf: String,
+    event_tx: mpsc::Sender<Event>,
+) {
+    match biliapi::update_room(&cookie, &csrf, room_id, title.as_deref(), area.as_deref()).await {
+        Ok(Some(audit_title)) => {
+            log!(info, "[Bili:Live] 直播间标题已更新为: {}", audit_title);
+            let _ = event_tx.send(Event::TitleUpdated(audit_title)).await;
         }
-    });
-
-    let _ = cmd_tx.send(LiveCommand::Stop { room_id }).await;
-
-    while let Some(ev) = ev_rx.recv().await {
-        match ev {
-            LiveEvent::Stopped => {
-                let _ = event_tx.send(Event::BilibiliLiveStopped).await;
-                break;
-            }
-            LiveEvent::StopFailed {
-                error_code,
-                message,
-            } => {
-                let _ = event_tx
-                    .send(Event::BilibiliLiveStopFailed {
-                        code: error_code,
-                        message,
-                    })
-                    .await;
-                break;
-            }
-            _ => {}
-        }
+        Ok(None) => {}
+        Err(e) => log!(warn, "Bili:Live: {}", e),
     }
 }
 
@@ -338,7 +351,7 @@ pub fn spawn_danmaku_worker(
 // ————————————————————————————————————————————————————————————
 
 pub fn spawn_irc_client_worker(
-    message_rx: impl crate::core::channel::DanmuReceiver + 'static + Send,
+    message_rx: impl crate::core::channel::DanmuReceiver + 'static,
     state_rx: tokio::sync::watch::Receiver<crate::core::state::GlobalState>,
 ) {
     tokio::spawn(async move {
@@ -355,7 +368,7 @@ pub fn spawn_irc_client_worker(
 
 #[cfg(feature = "channel-broadcast")]
 pub fn spawn_danmaku_formatter(danmaku_rx: tokio::sync::broadcast::Receiver<crate::core::channel::DanmuMessage>) {
-    let formatter = crate::utils::danmaku_formatter::DanmakuFormatter::new(Box::new(danmaku_rx));
+    let formatter = crate::utils::danmulog::DanmakuFormatter::new(Box::new(danmaku_rx));
     tokio::spawn(async move {
         if let Err(e) = formatter.run().await {
             log!(warn, "Danmu:Fmt: Format error - {}", e);

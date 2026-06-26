@@ -1,4 +1,4 @@
-/// Authentication Module
+//! Authentication Module
 
 pub mod init;
 pub mod login;
