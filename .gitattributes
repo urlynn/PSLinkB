@@ -1,0 +1,2 @@
+*.uc            linguist-language=JavaScript -linguist-detectable
+**/rpcd/ucode/* linguist-language=JavaScript -linguist-detectable

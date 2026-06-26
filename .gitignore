@@ -2,6 +2,7 @@
 
 !.gitignore
 !.gitattributes
+!.github
 !Cargo.toml
 !build.rs
 !openwrt/
