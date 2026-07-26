@@ -8,6 +8,7 @@ use crate::system::{System, FfmpegCmd, BilibiliCmd, DanmakuCmd};
 use tokio::sync::mpsc;
 
 #[cfg(unix)]
+#[cfg(feature = "openwrt")]
 use tokio::signal::unix::{signal, SignalKind};
 
 pub struct Channels {
@@ -26,7 +27,12 @@ async fn dispatch_effects(system: &mut System, event: Event, ch: &Channels) {
 async fn do_shutdown(system: &mut System, ch: &Channels) {
     #[cfg(feature = "openwrt")]
     crate::dns::redirect::cleanup(&system.config);
+    #[cfg(feature = "openwrt")]
+    crate::luci::clear("user");
     dispatch_effects(system, Event::Shutdown, ch).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    #[cfg(feature = "openwrt")]
+    crate::luci::set("running", false);
 }
 
 pub async fn run_loop(
@@ -35,11 +41,10 @@ pub async fn run_loop(
     ch: Channels,
     #[allow(unused_variables)] local_ip: &str,
     #[allow(unused_variables)] base_config: crate::config::Config,
+    #[cfg(unix)] sigterm: &mut tokio::signal::unix::Signal,
 ) -> Result<(), AppError> {
     #[cfg(feature = "openwrt")]
     let mut sighup = signal(SignalKind::hangup()).expect("无法注册 SIGHUP");
-    #[cfg(unix)]
-    let mut sigterm = signal(SignalKind::terminate()).expect("无法注册 SIGTERM");
 
     // SIGHUP 独立 task
     #[cfg(feature = "openwrt")]
@@ -83,8 +88,6 @@ pub async fn run_loop(
             }
         });
     }
-
-    log!(ok, "[INFO] ✓ 初始化完成 - PS5 按下直播键即可开播");
 
     loop {
         #[cfg(unix)]
@@ -141,7 +144,6 @@ pub async fn run_loop(
         }
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
     eprintln!("[INFO] Shutdown complete");
-    std::process::exit(0);
+    Ok(())
 }

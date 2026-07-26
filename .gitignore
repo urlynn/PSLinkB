@@ -1,0 +1,12 @@
+/*
+!.github
+!.gitignore
+!.gitattributes
+!Cargo.toml
+!build.rs
+!openwrt/
+!windows/
+!scripts/
+!src/
+!README.md
+.DS_Store

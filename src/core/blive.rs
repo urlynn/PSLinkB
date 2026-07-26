@@ -99,7 +99,7 @@ fn get_uid(cookie: &str) -> Option<String> {
 
 fn print_auth_info(code: i32, face_auth_url: &Option<String>) {
     if let Some(url) = face_auth_url {
-        crate::luci::set("qr_url", url);
+        crate::luci::set("qr", &format!(r#"{{"url":"{}","status":"waiting"}}"#, url));
         log!(warn, "Bili:Live: {}", AppError::bili_api("StartLive", code as i64, crate::core::error::start_live_error(code as i64, "需要验证")));
         eprintln!("  人脸验证链接: {}", url);
         eprintln!("  验证完成后自动开播");

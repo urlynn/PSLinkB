@@ -131,7 +131,8 @@ impl System {
             (State::Idle, Event::RtmpPublish { app, stream_key }) => {
                 let app_c = app.clone();
                 let key_c = stream_key.clone();
-                crate::luci::set("rtmp", &rtmp_url(&self.local_ip, &app, &stream_key));
+                let url = rtmp_url(&self.local_ip, &app, &stream_key);
+                crate::luci::set("live", &format!(r#"{{"status":"{}"}}"#, url));
                 let mut effects = vec![Effect::Log(format!(
                     "Stream Url - {}",
                     rtmp_url(&self.local_ip, &app, &stream_key)
@@ -167,8 +168,6 @@ impl System {
                 | State::Live { .. },
                 Event::RtmpUnpublish,
             ) => {
-                crate::luci::clear("rtmp");
-                crate::luci::reset();
                 let was_live = matches!(
                     self.state,
                     State::LivePreparing { .. } | State::Live { .. }
@@ -198,8 +197,7 @@ impl System {
                     retried: false,
                     client,
                 };
-                crate::luci::set("qr_status", "done");
-                crate::luci::clear("qr_url");
+                crate::luci::set("qr", r#"{"url":"","status":"done"}"#);
 
                 let mut effects = vec![
                     Effect::StopFaceWatch,
@@ -282,11 +280,9 @@ impl System {
             }
             // ————————————————————————————————————————————
             // 人脸 watcher: 3min 超时 -> 回 Idle 
-            // 踢不了 PS5, 单方面结束, Todo: 思考有没有我方结束方法, 也可能 Electron 模式再无人脸验证
+            // 踢不了 PS5, 单方面结束, Todo: 思考有没有我方结束方法
             // ————————————————————————————————————————————
             (State::WaitingFaceAuth { .. }, Event::FaceTimeout) => {
-                crate::luci::clear("rtmp");
-                crate::luci::reset();
                 let mut effects = self.cleanup(false);
                 self.notify_queue.push("人脸验证超时, 请重新开播".into());
                 effects.push(Effect::Log("人脸验证超时 - 放弃".into()));
@@ -428,7 +424,7 @@ impl System {
         };
         self.state = State::Idle;
         self.notify_queue.clear();
-        crate::luci::set("stream", "");
+        crate::luci::set("live", r#"{"status":""}"#);
         let mut effects = vec![
             Effect::StopFfmpeg,
             Effect::StopDanmaku,

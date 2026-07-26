@@ -196,6 +196,54 @@ pub async fn get_room_id(uid: i64) -> Result<u64, AppError> {
 }
 
 // ————————————————————————————————————————————————————————————
+// 直播分区列表
+// ————————————————————————————————————————————————————————————
+
+const OP_GET_AREA_LIST: &str = "GetAreaList";
+
+#[derive(Debug, Deserialize)]
+pub struct AreaParent {
+    pub id: i64,
+    pub name: String,
+    #[serde(default)]
+    pub list: Vec<AreaChild>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AreaChild {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub parent_id: String,
+    #[serde(default)]
+    pub parent_name: String,
+}
+
+pub async fn get_area_list() -> Result<Vec<AreaParent>, AppError> {
+    let resp: BiliApiResp<Vec<AreaParent>> = reqwest::get(
+        "https://api.live.bilibili.com/room/v1/Area/getList"
+    ).await?.json().await?;
+
+    if resp.code != 0 {
+        let msg = bili_common_error(resp.code as i64).unwrap_or(resp.err_msg());
+        return Err(AppError::bili_api(OP_GET_AREA_LIST, resp.code as i64, msg));
+    }
+    resp.data.ok_or_else(|| AppError::bili_api(OP_GET_AREA_LIST, 0, ""))
+}
+
+/// 查找子分区 id
+pub fn resolve_area_id(list: &[AreaParent], target: &str) -> Option<String> {
+    for parent in list {
+        for child in &parent.list {
+            if child.name == target {
+                return Some(child.id.clone());
+            }
+        }
+    }
+    None
+}
+
+// ————————————————————————————————————————————————————————————
 // 检测推流状态 (getRoomPlayInfo)
 // ————————————————————————————————————————————————————————————
 
