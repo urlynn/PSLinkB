@@ -1,0 +1,340 @@
+name: Build Deps - FFI + stream
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Target'
+        required: true
+        type: choice
+        options: [all, linux-x86_64, linux-aarch64, macos-aarch64, macos-x86_64, windows-x86_64, windows-aarch64]
+        default: 'all'
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+
+permissions:
+  contents: write
+
+jobs:
+  linux-x86_64:
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'linux-x86_64' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build FFmpeg + stream
+        run: |
+          mkdir -p /tmp/ffbuild
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE":/work -w /work \
+            -v /tmp/ffbuild:/tmp/ffbuild \
+            alpine:latest sh -c '
+              apk add build-base git nasm
+              cp /work/src/ffmpeg/stream_copy.c /tmp/
+              git clone --branch n8.0 --depth 1 https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg
+              cd /tmp/ffmpeg
+              ./configure \
+                --prefix=/tmp/ffbuild \
+                --enable-static --disable-shared \
+                --extra-cflags="-Os -ffunction-sections -fdata-sections -march=x86-64-v3" \
+                --extra-ldflags="-static -Wl,--gc-sections" \
+            --disable-everything --enable-small \
+            --enable-protocol=tcp,rtmp --enable-demuxer=flv --enable-muxer=flv \
+            --enable-parser=h264 --enable-network \
+                --disable-filters --disable-swscale --disable-bsfs \
+                --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+                --disable-iconv --disable-lzma --disable-bzlib --disable-zlib --disable-runtime-cpudetect
+              make -j$(nproc) && make install
+              mkdir -p /tmp/ffbuild/bin
+              gcc -Os -flto -ffunction-sections -fdata-sections -static -no-pie -march=x86-64-v3 \
+                /tmp/stream_copy.c \
+                -I/tmp/ffbuild/include -L/tmp/ffbuild/lib \
+                -lavformat -lavcodec -lavutil \
+                -Wl,--gc-sections \
+                -o /tmp/ffbuild/bin/pslinkb-stream
+              strip /tmp/ffbuild/bin/pslinkb-stream
+            '
+      - name: Verify - version + musl
+        run: |
+          BIN=/tmp/ffbuild/bin/pslinkb-stream
+          "$BIN" --version
+          file "$BIN" | grep -q 'statically linked' || { echo "ERROR: not static"; exit 1; }
+          strings "$BIN" | grep -c GLIBC | grep -qx 0 || { echo "ERROR: linked against glibc"; exit 1; }
+          echo "linux-x86_64 OK"
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/pkg/stream /tmp/pkg/ffbuild
+          cp /tmp/ffbuild/bin/pslinkb-stream /tmp/pkg/stream/pslinkb-stream
+          cp -r /tmp/ffbuild/lib /tmp/pkg/ffbuild/
+          cp -r /tmp/ffbuild/include /tmp/pkg/ffbuild/
+          tar czf /tmp/pslinkb-deps-linux-x86_64.tar.gz -C /tmp/pkg .
+          TAG="build-deps"
+          gh release view "$TAG" --repo ${{ github.repository }} 2>/dev/null || \
+            gh release create "$TAG" --repo ${{ github.repository }} --title "Build Dependencies" --notes "pslinkb-stream + FFmpeg static libs — CI built"
+          gh release upload "$TAG" /tmp/pslinkb-deps-linux-x86_64.tar.gz --repo ${{ github.repository }} --clobber
+
+  linux-aarch64:
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'linux-aarch64' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build FFmpeg + stream
+        run: |
+          mkdir -p /tmp/ffbuild
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE":/work -w /work \
+            -v /tmp/ffbuild:/tmp/ffbuild \
+            arm64v8/alpine:latest sh -c '
+              apk add build-base git nasm
+              cp /work/src/ffmpeg/stream_copy.c /tmp/
+              git clone --branch n8.0 --depth 1 https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg
+              cd /tmp/ffmpeg
+              ./configure \
+                --prefix=/tmp/ffbuild \
+                --enable-static --disable-shared \
+                --extra-cflags="-Os -ffunction-sections -fdata-sections" \
+                --extra-ldflags="-static -Wl,--gc-sections" \
+            --disable-everything --enable-small \
+            --enable-protocol=tcp,rtmp --enable-demuxer=flv --enable-muxer=flv \
+            --enable-parser=h264 --enable-network \
+                --disable-filters --disable-swscale --disable-bsfs \
+                --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+                --disable-iconv --disable-lzma --disable-bzlib --disable-zlib --disable-runtime-cpudetect
+              make -j$(nproc) && make install
+              mkdir -p /tmp/ffbuild/bin
+              gcc -Os -flto -ffunction-sections -fdata-sections -static -no-pie \
+                /tmp/stream_copy.c \
+                -I/tmp/ffbuild/include -L/tmp/ffbuild/lib \
+                -lavformat -lavcodec -lavutil \
+                -Wl,--gc-sections \
+                -o /tmp/ffbuild/bin/pslinkb-stream
+              strip /tmp/ffbuild/bin/pslinkb-stream
+            '
+      - name: Verify - version + musl
+        run: |
+          BIN=/tmp/ffbuild/bin/pslinkb-stream
+          "$BIN" --version
+          file "$BIN" | grep -q 'statically linked' || { echo "ERROR: not static"; exit 1; }
+          strings "$BIN" | grep -c GLIBC | grep -qx 0 || { echo "ERROR: linked against glibc"; exit 1; }
+          echo "linux-aarch64 OK"
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/pkg/stream /tmp/pkg/ffbuild
+          cp /tmp/ffbuild/bin/pslinkb-stream /tmp/pkg/stream/pslinkb-stream
+          cp -r /tmp/ffbuild/lib /tmp/pkg/ffbuild/
+          cp -r /tmp/ffbuild/include /tmp/pkg/ffbuild/
+          tar czf /tmp/pslinkb-deps-linux-aarch64.tar.gz -C /tmp/pkg .
+          TAG="build-deps"
+          gh release view "$TAG" --repo ${{ github.repository }} 2>/dev/null || \
+            gh release create "$TAG" --repo ${{ github.repository }} --title "Build Dependencies" --notes "pslinkb-stream + FFmpeg static libs — CI built"
+          gh release upload "$TAG" /tmp/pslinkb-deps-linux-aarch64.tar.gz --repo ${{ github.repository }} --clobber
+
+  macos-aarch64:
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'macos-aarch64' }}
+    runs-on: macos-26
+    timeout-minutes: 5
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: brew install nasm pkg-config
+      - name: Build FFmpeg
+        run: |
+          git clone --branch n8.0 --depth 1 https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg
+          cd /tmp/ffmpeg
+          ./configure \
+            --prefix=/tmp/ffbuild \
+            --cc=clang --target-os=darwin --arch=aarch64 \
+            --extra-cflags="-Oz -ffunction-sections -fdata-sections -fvisibility=hidden -mmacosx-version-min=11.0" \
+            --extra-ldflags="-Wl,-dead_strip -Wl,-S -Wl,-x" \
+            --enable-static --disable-shared \
+            --disable-everything --enable-small \
+            --enable-ffmpeg \
+            --enable-protocol=tcp,rtmp --enable-demuxer=flv --enable-muxer=flv --enable-parser=h264 --enable-network \
+            --disable-filters --disable-swscale --disable-bsfs --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+            --disable-iconv --disable-lzma --disable-bzlib --disable-zlib --disable-runtime-cpudetect
+          make -j$(sysctl -n hw.ncpu) && make install
+      - name: Upload FFmpeg libs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/pkg/ffbuild
+          cp -r /tmp/ffbuild/lib /tmp/pkg/ffbuild/
+          cp -r /tmp/ffbuild/include /tmp/pkg/ffbuild/
+          tar czf /tmp/pslinkb-deps-macos-aarch64.tar.gz -C /tmp/pkg .
+          TAG="build-deps"
+          gh release view "$TAG" --repo ${{ github.repository }} 2>/dev/null || \
+            gh release create "$TAG" --repo ${{ github.repository }} --title "Build Dependencies" --notes "pslinkb-stream + FFmpeg static libs — CI built"
+          gh release upload "$TAG" /tmp/pslinkb-deps-macos-aarch64.tar.gz --repo ${{ github.repository }} --clobber
+
+  macos-x86_64:
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'macos-x86_64' }}
+    runs-on: macos-26-intel
+    timeout-minutes: 5
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: brew install nasm pkg-config
+      - name: Build FFmpeg
+        run: |
+          git clone --branch n8.0 --depth 1 https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg
+          cd /tmp/ffmpeg
+          ./configure \
+            --prefix=/tmp/ffbuild \
+            --cc=clang --target-os=darwin --arch=x86_64 \
+            --extra-cflags="-Oz -ffunction-sections -fdata-sections -fvisibility=hidden" \
+            --extra-ldflags="-Wl,-dead_strip -Wl,-S -Wl,-x" \
+            --enable-static --disable-shared \
+            --disable-everything --enable-small \
+            --enable-ffmpeg \
+            --enable-protocol=tcp,rtmp --enable-demuxer=flv --enable-muxer=flv --enable-parser=h264 --enable-network \
+            --disable-filters --disable-swscale --disable-bsfs --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+            --disable-iconv --disable-lzma --disable-bzlib --disable-zlib --disable-runtime-cpudetect
+          make -j$(sysctl -n hw.ncpu) && make install
+      - name: Upload FFmpeg libs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/pkg/ffbuild
+          cp -r /tmp/ffbuild/lib /tmp/pkg/ffbuild/
+          cp -r /tmp/ffbuild/include /tmp/pkg/ffbuild/
+          tar czf /tmp/pslinkb-deps-macos-x86_64.tar.gz -C /tmp/pkg .
+          TAG="build-deps"
+          gh release view "$TAG" --repo ${{ github.repository }} 2>/dev/null || \
+            gh release create "$TAG" --repo ${{ github.repository }} --title "Build Dependencies" --notes "pslinkb-stream + FFmpeg static libs — CI built"
+          gh release upload "$TAG" /tmp/pslinkb-deps-macos-x86_64.tar.gz --repo ${{ github.repository }} --clobber
+
+  windows-x86_64:
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows-x86_64' }}
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: >-
+            git
+            make
+            diffutils
+            mingw-w64-x86_64-binutils
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-nasm
+      - name: Build FFmpeg + stream
+        shell: msys2 {0}
+        run: |
+          cp "$GITHUB_WORKSPACE/src/ffmpeg/stream_copy.c" /tmp/
+          git clone --branch n8.0 --depth 1 https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg
+          cd /tmp/ffmpeg
+          ./configure \
+            --prefix=/tmp/ffbuild \
+            --target-os=mingw32 --arch=x86_64 \
+            --extra-cflags="-Os -ffunction-sections -fdata-sections" \
+            --enable-static --disable-shared \
+            --disable-everything --enable-small \
+            --enable-ffmpeg \
+            --enable-protocol=tcp,rtmp \
+            --enable-demuxer=flv --enable-muxer=flv \
+            --enable-parser=h264 \
+            --enable-network \
+            --disable-filters --disable-swscale --disable-bsfs \
+            --disable-doc --disable-debug \
+            --disable-ffplay --disable-ffprobe \
+            --disable-iconv --disable-lzma --disable-bzlib --disable-zlib \
+            --disable-runtime-cpudetect
+          make -j4 && make install
+          mkdir -p /tmp/ffbuild/bin
+          export PKG_CONFIG_PATH=/tmp/ffbuild/lib/pkgconfig
+          gcc -Os -flto -ffunction-sections -fdata-sections -static \
+            /tmp/stream_copy.c \
+            $(pkg-config --cflags --libs --static libavformat libavcodec libavutil) \
+            -Wl,--gc-sections \
+            -o /tmp/ffbuild/bin/pslinkb-stream.exe
+          cp /tmp/ffbuild/bin/pslinkb-stream.exe "$GITHUB_WORKSPACE/pslinkb-stream.exe"
+      - name: Copy to workspace + verify
+        shell: bash
+        run: |
+          set -e
+          SRC="$GITHUB_WORKSPACE/pslinkb-stream.exe"
+          [ -f "$SRC" ] || { echo "ERROR: stream not built (msys2 step produced no binary)"; exit 1; }
+          mkdir -p /tmp/ffbuild/bin
+          cp "$SRC" /tmp/ffbuild/bin/pslinkb-stream.exe
+          /tmp/ffbuild/bin/pslinkb-stream.exe --version
+          echo "windows-x86_64 OK"
+      - name: Upload binary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/pkg/stream
+          cp /tmp/ffbuild/bin/pslinkb-stream.exe /tmp/pkg/stream/pslinkb-stream.exe
+          tar czf /tmp/pslinkb-deps-windows-x86_64.tar.gz -C /tmp/pkg .
+          TAG="build-deps"
+          gh release view "$TAG" --repo ${{ github.repository }} 2>/dev/null || \
+            gh release create "$TAG" --repo ${{ github.repository }} --title "Build Dependencies" --notes "pslinkb-stream + FFmpeg static libs — CI built"
+          gh release upload "$TAG" /tmp/pslinkb-deps-windows-x86_64.tar.gz --repo ${{ github.repository }} --clobber
+
+  windows-aarch64:
+    if: ${{ inputs.platform == 'windows-aarch64' }}
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build FFmpeg + stream
+        run: |
+          cp "$GITHUB_WORKSPACE/src/ffmpeg/stream_copy.c" /tmp/
+          git clone --branch n8.0 --depth 1 https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg
+          cd /tmp/ffmpeg
+          ./configure \
+            --prefix=/tmp/ffbuild \
+            --target-os=mingw32 --arch=aarch64 \
+            --extra-cflags="-Os -ffunction-sections -fdata-sections -static" \
+            --extra-ldflags="-static" \
+            --enable-static --disable-shared \
+            --disable-everything --enable-small \
+            --enable-ffmpeg \
+            --enable-protocol=tcp,rtmp --enable-demuxer=flv --enable-muxer=flv --enable-parser=h264 --enable-network \
+            --disable-filters --disable-swscale --disable-bsfs --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+            --disable-iconv --disable-lzma --disable-bzlib --disable-zlib --disable-runtime-cpudetect
+          make -j4 && make install
+          mkdir -p /tmp/ffbuild/bin
+          gcc -Os -flto -ffunction-sections -fdata-sections \
+            -I/tmp/ffbuild/include -L/tmp/ffbuild/lib \
+            /tmp/stream_copy.c \
+            -lavformat -lavcodec -lavutil \
+            -static -Wl,--gc-sections \
+            -o /tmp/ffbuild/bin/pslinkb-stream.exe
+      - name: Verify
+        run: |
+          /tmp/ffbuild/bin/pslinkb-stream.exe --version
+          echo "windows-aarch64 OK"
+      - name: Upload binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/pkg/stream
+          cp /tmp/ffbuild/bin/pslinkb-stream.exe /tmp/pkg/stream/pslinkb-stream.exe
+          tar czf /tmp/pslinkb-deps-windows-aarch64.tar.gz -C /tmp/pkg .
+          TAG="build-deps"
+          gh release view "$TAG" --repo ${{ github.repository }} 2>/dev/null || \
+            gh release create "$TAG" --repo ${{ github.repository }} --title "Build Dependencies" --notes "pslinkb-stream + FFmpeg static libs — CI built"
+          gh release upload "$TAG" /tmp/pslinkb-deps-windows-aarch64.tar.gz --repo ${{ github.repository }} --clobber
