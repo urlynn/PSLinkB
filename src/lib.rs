@@ -19,3 +19,5 @@ pub mod utils;
 
 #[path = "utils/log.rs"]
 pub mod log;
+
+pub const INIT_COMPLETE_MSG: &str = "[INFO] ✓ 初始化完成 - PS5 按下直播键即可开播";

@@ -5,7 +5,6 @@ use rtmp_rs::session::{SessionContext, StreamContext};
 use rtmp_rs::protocol::message::{ConnectParams, PlayParams, PublishParams};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::collections::HashMap;
 
 use crate::core::error::AppError;
 use tokio::sync::{mpsc, Mutex};
@@ -46,10 +45,7 @@ impl RtmpActor {
         let handler = RtmpHandlerImpl {
             event_tx: Arc::new(self.event_tx),
             current_stream: self.current_stream.clone(),
-            active_streams: Arc::new(Mutex::new(HashMap::new())),
         };
-        
-        eprintln!("[RTMP] Listening - {}", addr);
         
         let server = RtmpServer::new(
             ServerConfig::default()
@@ -70,7 +66,6 @@ impl RtmpActor {
 struct RtmpHandlerImpl {
     event_tx: Arc<mpsc::Sender<StreamEvent>>,
     current_stream: Arc<Mutex<Option<String>>>,
-    active_streams: Arc<Mutex<HashMap<String, String>>>, // stream_key -> app
 }
 
 impl RtmpHandlerImpl {
@@ -81,18 +76,15 @@ impl RtmpHandlerImpl {
         stream_key: String,
         event_type: StreamEventType,
     ) -> AuthResult {
-        // 更新当前流状态和活跃流映射
+        // 更新当前流状态
         let mut current = self.current_stream.lock().await;
-        let mut active = self.active_streams.lock().await;
 
         match event_type {
             StreamEventType::Started => {
                 *current = Some(stream_key.clone());
-                active.insert(stream_key.clone(), app.clone());
             },
             StreamEventType::Stopped => {
                 *current = None;
-                active.remove(&stream_key);
             },
         }
 
@@ -155,9 +147,7 @@ impl RtmpHandler for RtmpHandlerImpl {
         eprintln!("[RTMP] Unpublish - {} - {}", flash_ver, ctx.session.peer_addr);
 
         async move {
-            // 清 current_stream -> on_disconnect 据此跳过
             *handler.current_stream.lock().await = None;
-            handler.active_streams.lock().await.remove(&ctx.stream_key);
 
             let event = StreamEvent {
                 app: String::new(),
@@ -186,7 +176,6 @@ impl RtmpHandler for RtmpHandlerImpl {
             if !is_ps5 { return; }
             if handler.current_stream.lock().await.take().is_none() { return; }
             eprintln!("[WARN] {} - {} - Abnormal disconnect -> Cleanup", flash_ver, addr);
-            handler.active_streams.lock().await.clear();
             let event = StreamEvent {
                 app: String::new(),
                 stream_key: String::new(),
@@ -203,7 +192,6 @@ impl RtmpHandlerImpl {
         Self {
             event_tx: self.event_tx.clone(),
             current_stream: self.current_stream.clone(),
-            active_streams: self.active_streams.clone(),
         }
     }
 }

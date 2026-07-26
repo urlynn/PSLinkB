@@ -1,0 +1,12 @@
+location ^~ /ubus/subscribe/ {
+    proxy_pass http://127.0.0.1:6668;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+    proxy_ignore_client_abort on;
+    chunked_transfer_encoding on;
+}

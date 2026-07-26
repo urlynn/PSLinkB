@@ -1,9 +1,12 @@
 #!/bin/sh
-rm -f /usr/lib/lua/luci/controller/pslinkb.lua
-rm -rf /tmp/luci-* /tmp/luci-modulecache/ /tmp/luci-indexcache*
+# 强制用包内最新 init.d 覆盖 /etc/init.d/pslinkb
+# 默认 opkg/apk 把 /etc 下文件当 conffile,升级时不覆盖,会留下与新二进制不兼容的旧脚本,导致服务无法启动
+if [ -f /usr/share/pslinkb/init.d/pslinkb ]; then
+    cp -f /usr/share/pslinkb/init.d/pslinkb /etc/init.d/pslinkb
+    chmod 755 /etc/init.d/pslinkb
+fi
+
 /etc/init.d/pslinkb enable
-/etc/init.d/rpcd restart
-/etc/init.d/uhttpd restart 2>/dev/null || /etc/init.d/nginx restart 2>/dev/null
 
 uci -q get pslinkb.service.dns_redirect >/dev/null 2>&1 && exit 0
 uci set pslinkb.service=service

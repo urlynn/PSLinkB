@@ -27,13 +27,13 @@ impl IrcServerActor {
         Self { port, state_tx, event_tx, notify_rx }
     }
 
-    /// 运行 IRC Server Actor
-    pub async fn run(mut self) -> Result<(), AppError> {
+    pub async fn run(mut self, ready_tx: tokio::sync::oneshot::Sender<()>) -> Result<(), AppError> {
         let addr = format!("0.0.0.0:{}", self.port);
         let listener = tokio::net::TcpListener::bind(&addr).await?;
         eprintln!("[IRC:Srv] Listening - {}", addr);
+        let _ = ready_tx.send(());
 
-        let writers: Arc<Mutex<Vec<(tokio::net::tcp::OwnedWriteHalf, String)>>> =
+        let writers: Arc<Mutex<Vec<tokio::net::tcp::OwnedWriteHalf>>> =
             Arc::new(Mutex::new(Vec::new()));
 
         loop {
@@ -54,7 +54,7 @@ impl IrcServerActor {
 
                     {
                         let mut writers_guard = writers.lock().await;
-                        writers_guard.push((write_half, client_addr.clone()));
+                        writers_guard.push(write_half);
                     }
 
                     tokio::spawn(async move {
@@ -69,7 +69,7 @@ impl IrcServerActor {
                     });
                 }
 
-                // 系统通知 - 来自状态机
+                // 系统通知
                 notify = self.notify_rx.recv() => {
                     match notify {
                         Some(msg) => {
@@ -97,7 +97,7 @@ fn is_ps5_connection(addr: &std::net::SocketAddr) -> bool {
 /// 处理单个 IRC 客户端
 async fn handle_irc_client(
     mut reader: tokio::net::tcp::OwnedReadHalf,
-    writers: Arc<Mutex<Vec<(tokio::net::tcp::OwnedWriteHalf, String)>>>,
+    writers: Arc<Mutex<Vec<tokio::net::tcp::OwnedWriteHalf>>>,
     state_tx: watch::Sender<GlobalState>,
     event_tx: mpsc::Sender<Event>,
     is_ps5: bool,
@@ -125,13 +125,13 @@ async fn handle_irc_client(
                     continue;
                 }
                 
-                // 处理 PASS 命令 - 握手响应
+                // 握手响应
                 if message.starts_with("PASS ") {
                     // 欢迎消息
                     let welcome = ":tmi.twitch.tv 001 urlynn :Welcome, GLHF!\r\n";
                     broadcast_message(&writers, welcome.as_bytes()).await;
                 }
-                // 处理 JOIN 命令 - 提取频道名
+                // 提取频道名
                 else if message.starts_with("JOIN ") {
                     let parts: Vec<&str> = message.split_whitespace().collect();
                     if parts.len() >= 2 {
@@ -143,23 +143,18 @@ async fn handle_irc_client(
                         });
                         let _ = event_tx.send(Event::Ps5IrcReady { channel: channel.clone() }).await;
                         
-                        // === 标准 IRC 握手响应 ===
-                        
-                        // 1. 发送 JOIN 确认
                         let join_response = format!(
                             ":urlynn!urlynn@urlynn.tmi.twitch.tv JOIN {}\r\n",
                             channel
                         );
                         broadcast_message(&writers, join_response.as_bytes()).await;
-                        
-                        // 2. 发送房间主题
+
                         let topic = format!(
                             ":tmi.twitch.tv 332 urlynn {} :PSLinkB Live Streaming\r\n",
                             channel
                         );
                         broadcast_message(&writers, topic.as_bytes()).await;
-                        
-                        // 3. 发送服务就绪 PRIVMSG - 自定义为加入频道通知
+
                         let ready_msg = format!(
                             ":PSLinkB PRIVMSG {} :已加入频道{}\r\n",
                             channel, channel
@@ -189,13 +184,13 @@ async fn handle_irc_client(
 
 /// 广播消息
 async fn broadcast_message(
-    writers: &Arc<Mutex<Vec<(tokio::net::tcp::OwnedWriteHalf, String)>>>,
+    writers: &Arc<Mutex<Vec<tokio::net::tcp::OwnedWriteHalf>>>,
     data: &[u8],
 ) {
     let mut writers_guard = writers.lock().await;
     let mut to_remove = Vec::new();
     
-    for (i, (writer, _)) in writers_guard.iter_mut().enumerate() {
+    for (i, writer) in writers_guard.iter_mut().enumerate() {
         if writer.write_all(data).await.is_err() {
             to_remove.push(i);
         }

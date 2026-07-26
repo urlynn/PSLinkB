@@ -1,6 +1,6 @@
 [package]
 name = "pslinkb"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 description = "PS5 to Bilibili Live Streaming Bridge"
 license = "MIT OR Apache-2.0"
@@ -10,12 +10,17 @@ default-run = "pslinkb"
 name = "pslinkb"
 path = "src/main.rs"
 
+[[bin]]
+name = "pslinkb-windivert"
+path = "src/bin/windivert.rs"
+required-features = ["windivert"]
+
 # ==================== 核心依赖 ====================
 [dependencies]
 blivemsg = "0.2.4"
 
 # 异步运行时
-tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "sync", "macros", "io-util", "time"] }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "sync", "macros", "io-util", "time", "process"] }
 futures-util = "0.3.32"
 
 # 序列化
@@ -45,17 +50,18 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 libc = "0.2"
 
 # ==================== 桌面模式 ====================
-
 clap = { version = "4.6.1", features = ["derive"], optional = true }
 toml = { version = "1.1.2", optional = true }
 
 # 扫码登录
 qrcode = { version = "0.14.1", optional = true }
-image = { version = "0.25.10", optional = true }
-url = { version = "2.5.8", optional = true }
 
 # DNS 重定向
 hickory-proto = { version = "0.26.1", optional = true }
+
+# WinDivert 动态加载
+[target.'cfg(windows)'.dependencies]
+libloading = "0.8"
 
 # ==================== Release 优化 ====================
 [profile.release]
@@ -68,7 +74,7 @@ strip = true
 # ==================== Features ====================
 [features]
 default = []
-cli = ["clap", "toml", "qrcode", "image", "url"]
+cli = ["clap", "toml", "qrcode"]
 
 # 弹幕通道模式 - 二选一, 互斥
 channel-mpsc = []
@@ -85,6 +91,9 @@ ffi-ffmpeg = []
 
 # DNS 重定向
 dns-redirect = ["hickory-proto"]
+
+# WinDivert 
+windivert = ["dns-redirect"]
 
 # 调试日志
 debug-log = []

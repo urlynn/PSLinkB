@@ -17,6 +17,8 @@ use crate::core::event::Event;
 pub fn spawn_rtmp_server(event_tx: mpsc::Sender<Event>) {
     let (rtmp_tx, mut rtmp_rx) = mpsc::channel::<crate::actors::rtmp::StreamEvent>(32);
 
+    eprintln!("[RTMP] Listening - 0.0.0.0:{}", RTMP_PORT);
+
     tokio::spawn(async move {
         let actor = crate::actors::rtmp::RtmpActor::new(RTMP_PORT, rtmp_tx);
         if let Err(e) = actor.run().await {
@@ -45,20 +47,22 @@ pub fn spawn_irc_server(
     irc_state_tx: tokio::sync::watch::Sender<crate::core::state::GlobalState>,
     irc_notify_rx: mpsc::Receiver<String>,
     event_tx: mpsc::Sender<Event>,
-) {
+) -> tokio::sync::oneshot::Receiver<()> {
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         let actor = crate::actors::irc_server::IrcServerActor::new(IRC_PORT, irc_state_tx, event_tx, irc_notify_rx);
-        if let Err(e) = actor.run().await {
+        if let Err(e) = actor.run(ready_tx).await {
             log!(error, "IRC: {}", AppError::crash("Server", e.to_string()));
         }
     });
+    ready_rx
 }
 
 // ————————————————————————————————————————————————————————————
 // 按需 Workers
 // ————————————————————————————————————————————————————————————
 
-pub fn spawn_ffmpeg_worker(mut cmd_rx: mpsc::Receiver<crate::system::FfmpegCmd>, event_tx: mpsc::Sender<Event>) {
+pub fn spawn_ffmpeg_worker(mut cmd_rx: mpsc::Receiver<crate::system::FfmpegCmd>, event_tx: mpsc::Sender<Event>, ffmpeg_path: Option<String>) {
     tokio::spawn(async move {
         let mut actor_tx: Option<mpsc::Sender<crate::actors::ffmpeg::FfmpegCommand>> = None;
         let mut sd_tx: Option<tokio::sync::broadcast::Sender<()>> = None;
@@ -72,7 +76,7 @@ pub fn spawn_ffmpeg_worker(mut cmd_rx: mpsc::Receiver<crate::system::FfmpegCmd>,
                     bilibili_stream_key,
                 } => {
                     let (tx, rx) = mpsc::channel(8);
-                    let actor = crate::actors::ffmpeg::FfmpegActor::new(rx, event_tx.clone());
+                    let actor = crate::actors::ffmpeg::FfmpegActor::new(rx, event_tx.clone(), ffmpeg_path.clone());
                     let (sdt, sdr) = tokio::sync::broadcast::channel(1);
 
                     tokio::spawn(async move {
@@ -271,7 +275,7 @@ async fn update_room_info(
 /// 流状态监听：开播后轮询 format count，超时后 FLV 探测 fallback
 async fn monitor_stream_status(room_id: u64, event_tx: mpsc::Sender<Event>) {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    crate::luci::set("stream", "fake");
+    crate::luci::set("live", r#"{"status":"fake"}"#);
 
     // 主检测：format 计数 ≥3
     for attempt in 1..=8 {
@@ -279,12 +283,12 @@ async fn monitor_stream_status(room_id: u64, event_tx: mpsc::Sender<Event>) {
         match biliapi::get_stream_info(room_id).await {
             Ok(biliapi::StreamInfo::Live) => {
                 log!(ok, "[Bili:Live] Live stream confirmed - GetStreamInfo, {} - ✓ 直播视频流验证成功", attempt);
-                crate::luci::set("stream", "live");
+                crate::luci::set("live", r#"{"status":"live"}"#);
                 let _ = event_tx.send(Event::BilibiliStreamConfirmed { room_id }).await;
                 return;
             }
             Ok(biliapi::StreamInfo::Offline) => {
-                crate::luci::set("stream", "offline");
+                crate::luci::set("live", r#"{"status":"offline"}"#);
                 return;
             }
             _ => continue,
@@ -293,16 +297,16 @@ async fn monitor_stream_status(room_id: u64, event_tx: mpsc::Sender<Event>) {
 
     // 5s 超时 -> 确认未关播后才 fallback
     if let Ok(biliapi::StreamInfo::Offline) = biliapi::get_stream_info(room_id).await {
-        crate::luci::set("stream", "offline");
+        crate::luci::set("live", r#"{"status":"offline"}"#);
         return;
     }
-    crate::luci::set("stream", "probing");
+    crate::luci::set("live", r#"{"status":"probing"}"#);
     if biliapi::flv_probe(room_id).await {
         log!(ok, "[Bili:Live] Live stream confirmed - PlayUrl - ✓ 直播视频流验证成功");
-        crate::luci::set("stream", "live");
+        crate::luci::set("live", r#"{"status":"live"}"#);
         let _ = event_tx.send(Event::BilibiliStreamConfirmed { room_id }).await;
     } else {
-        crate::luci::set("stream", "timeout");
+        crate::luci::set("live", r#"{"status":"timeout"}"#);
         let _ = event_tx.send(Event::BilibiliStreamTimeout { room_id }).await;
     }
 }
@@ -375,3 +379,5 @@ pub fn spawn_danmaku_formatter(danmaku_rx: tokio::sync::broadcast::Receiver<crat
         }
     });
 }
+
+

@@ -17,6 +17,13 @@ fn main() {
 
     #[cfg(feature = "external-ffmpeg")]
     println!("cargo:warning=external-ffmpeg mode — skipping FFmpeg link");
+
+    if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
+        println!("cargo:rustc-link-lib=shell32");
+    }
+
+
+    build_windivert_manifest();
 }
 
 #[cfg(feature = "ffi-ffmpeg")]
@@ -61,5 +68,37 @@ fn build_ffi() {
             }
         }
         _ => eprintln!("[WARN] unsupported platform: {}", platform_id),
+    }
+}
+
+fn build_windivert_manifest() {
+    if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() != "windows" {
+        return;
+    }
+
+    let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let windows_dir = manifest_dir.join("windows");
+    let rc = windows_dir.join("pslinkb-windivert.rc");
+    if !rc.exists() {
+        return;
+    }
+
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let obj = std::path::PathBuf::from(&out_dir).join("pslinkb-windivert.res.o");
+
+    println!("cargo:rerun-if-changed={}", rc.display());
+    println!("cargo:rerun-if-changed={}", windows_dir.join("pslinkb-windivert.exe.manifest").display());
+
+    let status = std::process::Command::new("windres")
+        .arg(&rc)
+        .arg("-O").arg("coff")
+        .arg("-I").arg(&windows_dir)
+        .arg("-o").arg(&obj)
+        .status();
+
+    if status.map(|s| s.success()).unwrap_or(false) {
+        println!("cargo:rustc-link-arg-bin=pslinkb-windivert={}", obj.display());
+    } else {
+        eprintln!("[WARN] windivert 编译 manifest 失败");
     }
 }

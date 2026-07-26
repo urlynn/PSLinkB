@@ -94,10 +94,6 @@ impl IrcClientWorker {
 
     fn format_message(msg: &DanmuMessage, channel: &str) -> Option<String> {
         match msg {
-            DanmuMessage::Notify(text) => Some(format!(
-                ":PSLinkB!PSLinkB@PSLinkB.tmi.twitch.tv PRIVMSG {} :{}\r\n",
-                channel, text
-            )),
             DanmuMessage::Danmaku(blive_msg) => Self::format_danmaku(blive_msg, channel),
         }
     }

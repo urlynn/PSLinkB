@@ -38,6 +38,7 @@ macro_rules! dlog {
 
 use owo_colors::{OwoColorize, Stream, Style};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -50,37 +51,64 @@ pub fn is_debug_enabled() -> bool {
     DEBUG_ENABLED.load(Ordering::Relaxed)
 }
 
+/// Windivert 专用
+static LOG_OVERRIDE: OnceLock<fn(&str)> = OnceLock::new();
+
+pub fn set_override(f: fn(&str)) {
+    let _ = LOG_OVERRIDE.set(f);
+}
+
 #[doc(hidden)]
 pub fn _info(msg: &str) {
-    eprintln!("{}", msg);
+    if let Some(f) = LOG_OVERRIDE.get() { f(msg); } else { eprintln!("{}", msg); }
 }
 
 #[doc(hidden)]
 pub fn _ok(msg: &str) {
-    eprintln!("{}", msg.if_supports_color(Stream::Stderr, |s| s.green()));
+    if let Some(f) = LOG_OVERRIDE.get() {
+        f(msg);
+    } else {
+        eprintln!("{}", msg.if_supports_color(Stream::Stderr, |s| s.green()));
+    }
 }
 
 #[doc(hidden)]
 pub fn _warn(msg: &str) {
-    eprintln!("{} {}", "[WARN]".if_supports_color(Stream::Stderr, |s| s.yellow()), msg);
+    if let Some(f) = LOG_OVERRIDE.get() {
+        f(&format!("[WARN] {}", msg));
+    } else {
+        eprintln!("{} {}", "[WARN]".if_supports_color(Stream::Stderr, |s| s.yellow()), msg);
+    }
     #[cfg(feature = "openwrt")]
     crate::luci::set("error", msg);
 }
 
 #[doc(hidden)]
 pub fn _error(msg: &str) {
-    eprintln!("{} {}", "[ERROR]".if_supports_color(Stream::Stderr, |s| s.red()), msg);
+    if let Some(f) = LOG_OVERRIDE.get() {
+        f(&format!("[ERROR] {}", msg));
+    } else {
+        eprintln!("{} {}", "[ERROR]".if_supports_color(Stream::Stderr, |s| s.red()), msg);
+    }
     #[cfg(feature = "openwrt")]
     crate::luci::set("error", msg);
 }
 
 #[doc(hidden)]
 pub fn _alert(msg: &str) {
-    let style = Style::new().red().bold();
-    eprintln!("{}", msg.if_supports_color(Stream::Stderr, |s| s.style(style)));
+    if let Some(f) = LOG_OVERRIDE.get() {
+        f(&format!("[ERROR] {}", msg));
+    } else {
+        let style = Style::new().red().bold();
+        eprintln!("{}", msg.if_supports_color(Stream::Stderr, |s| s.style(style)));
+    }
 }
 
 #[doc(hidden)]
 pub fn _dbg(msg: &str) {
-    eprintln!("[DEBUG] {}", msg);
+    if let Some(f) = LOG_OVERRIDE.get() {
+        f(&format!("[DEBUG] {}", msg));
+    } else {
+        eprintln!("[DEBUG] {}", msg);
+    }
 }

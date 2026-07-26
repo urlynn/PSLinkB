@@ -9,9 +9,9 @@ use pslinkb::core::state::GlobalState;
 use pslinkb::system::{System, FfmpegCmd, BilibiliCmd, DanmakuCmd};
 use pslinkb::core::error::AppError;
 use pslinkb::run::{Channels, run_loop};
-use pslinkb::{luci, spawn};
-#[cfg(feature = "cli")]
-use pslinkb::log;
+use pslinkb::{luci, spawn, log};
+#[cfg(unix)]
+use tokio::signal::unix::{signal, SignalKind};
 
 use tokio::sync::mpsc;
 
@@ -20,7 +20,17 @@ use tokio::sync::mpsc;
 // ————————————————————————————————————————————————————————————
 
 #[tokio::main]
-async fn main() -> Result<(), AppError> {
+async fn main() {
+    if let Err(e) = run().await {
+        eprintln!("[ERROR] {}", e);
+        #[cfg(windows)]
+        let _ = std::process::Command::new("cmd").args(["/C", "pause"]).status();
+        luci::set("running", false);
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), AppError> {
     // --version - openwrt 专用 
     #[cfg(feature = "openwrt")]
     if std::env::args().any(|a| a == "--version" || a == "-v") {
@@ -45,13 +55,13 @@ async fn main() -> Result<(), AppError> {
     rustls::crypto::ring::default_provider().install_default()
         .expect("TLS provider init failed");
 
-    // ── OpenWRT 关色──
+    // ── OpenWRT 关色 ──
     #[cfg(feature = "openwrt")]
     owo_colors::set_override(false);
 
     // ── 加载配置 ──
     #[cfg(feature = "cli")]
-    let (config, config_path, cli_cookie) = load_config(&args)?;
+    let (config, config_path, cli_cookie, created) = load_config(&args)?;
     #[cfg(feature = "openwrt")]
     let (config, config_path) = load_config()?;
 
@@ -77,6 +87,9 @@ async fn main() -> Result<(), AppError> {
     // ── IPC 目录 + 清理 ──
     luci::init();
 
+    #[cfg(feature = "openwrt")]
+    luci::set("running", true);
+
     // ── 认证（放行 or exec 重启）──
     let (cookie_string, csrf) = ensure_cookie(&config_path, &config).await?;
 
@@ -84,13 +97,26 @@ async fn main() -> Result<(), AppError> {
     let local_ip = pslinkb::utils::ip::local_ip();
 
     #[cfg(feature = "dns-redirect")]
+    let deferred;
+    #[cfg(feature = "dns-redirect")]
     {
         let dns_override = parse_dns_override(
             #[cfg(feature = "cli")]
             args.dns.as_deref(),
         );
-        pslinkb::dns::auto_start(config.dns_proxy, &local_ip, dns_override).await;
+        #[cfg(all(feature = "cli", windows))]
+        let proxy_url = config.proxy.as_deref();
+        deferred = pslinkb::dns::auto_start(
+            config.dns_proxy,
+            &local_ip,
+            dns_override,
+            #[cfg(all(feature = "cli", windows))]
+            proxy_url,
+        ).await;
     }
+
+    #[cfg(unix)]
+    let mut sigterm = signal(SignalKind::terminate()).expect("无法注册 SIGTERM");
 
     #[cfg(feature = "openwrt")]
     {
@@ -99,9 +125,58 @@ async fn main() -> Result<(), AppError> {
 
     // ── 重新加载配置 ──
     #[cfg(feature = "cli")]
-    let config = Config::from_file(&config_path)?;
+    let mut config = Config::from_file(&config_path)?;
     #[cfg(feature = "openwrt")]
-    let config = Config::from_uci()?;
+    let mut config = Config::from_uci()?;
+
+    #[cfg(feature = "cli")]
+    config.apply_cli_overrides(
+        args.room_id,
+        args.title.clone(),
+        args.area.clone(),
+        args.mode.as_ref().and_then(|s| s.parse().ok()),
+        #[cfg(windows)]
+        args.proxy.clone(),
+        args.ffmpeg.clone(),
+    );
+
+    #[cfg(feature = "cli")]
+    if args.area.is_none() {
+        use pslinkb::core::biliapi;
+        match biliapi::get_area_list().await {
+            Ok(list) => {
+                if let Some(resolved) = biliapi::resolve_area_id(&list, &config.live.area_name) {
+                    let resolved_str = resolved.to_string();
+                    if created {
+                        if let Err(_) = Config::save_area_v2(&config_path, &resolved_str) {
+                            log!(warn, "分区设置失败 - 请在 pslinkb.toml 设置分区 ID");
+                        } else {
+                            config.live.area_v2 = resolved_str.clone();
+                        }
+                    } else if config.live.area_v2 != resolved_str {
+                        log!(warn, "分区 {} 的 ID 已变为 {} - 如需修改 请在 pslinkb.toml 设置 area_v2 = \"{}\"",
+                            config.live.area_name, resolved_str, resolved_str);
+                    }
+                }
+            }
+            Err(_) => {
+                log!(warn, "分区设置失败 - 请在 pslinkb.toml 设置分区 ID");
+            }
+        }
+    }
+
+    #[cfg(feature = "openwrt")]
+    {
+        use pslinkb::core::biliapi;
+        if let Ok(list) = biliapi::get_area_list().await {
+            if let Some(resolved) = biliapi::resolve_area_id(&list, &config.live.area_name) {
+                let resolved_str = resolved.to_string();
+                if Config::save_area_v2(&resolved_str).is_ok() {
+                    config.live.area_v2 = resolved_str;
+                }
+            }
+        }
+    }
 
     #[cfg(feature = "cli")]
     {
@@ -133,7 +208,7 @@ async fn main() -> Result<(), AppError> {
 
     let (irc_notify_tx, irc_notify_rx) = mpsc::channel::<String>(64);
     spawn::spawn_rtmp_server(event_tx.clone());
-    spawn::spawn_irc_server(irc_state_tx, irc_notify_rx, event_tx.clone());
+    let irc_ready = spawn::spawn_irc_server(irc_state_tx, irc_notify_rx, event_tx.clone());
 
     // IRC Client
     #[cfg(feature = "channel-mpsc")]
@@ -149,13 +224,42 @@ async fn main() -> Result<(), AppError> {
     }
 
     // ── 启动按需 workers ──
-    spawn::spawn_ffmpeg_worker(ffmpeg_rx, event_tx.clone());
+    #[cfg(feature = "cli")]
+    let ffmpeg_path = config.ffmpeg.clone();
+    #[cfg(not(feature = "cli"))]
+    let ffmpeg_path = None;
+    spawn::spawn_ffmpeg_worker(ffmpeg_rx, event_tx.clone(), ffmpeg_path);
     spawn::spawn_bililive_cmds(bilibili_rx, event_tx.clone(), cookie_string.clone(), csrf.clone());
     spawn::spawn_danmaku_worker(danmaku_cmd_rx, danmaku_tx.clone(), cookie_string, event_tx.clone());
 
+    let _ = irc_ready.await;
+
+    // ── 初始化完成 ──
+    #[cfg(feature = "dns-redirect")]
+    if !deferred {
+        log!(ok, "{}", pslinkb::INIT_COMPLETE_MSG);
+    }
+    #[cfg(feature = "openwrt")]
+    log!(ok, "{}", pslinkb::INIT_COMPLETE_MSG);
+
+    // ── Windows ──
+    #[cfg(all(feature = "cli", windows))]
+    {
+        log!(alert, "[WARN] 请将 PS5 的首选 DNS 设为本机 IP: {} - 备用 DNS 为 0.0.0.0", local_ip);
+        log!(alert, "[WARN] 若设置完成后此处未打印 PS5 连接日志 - 请在 https://urlynn.xyz 根据 #常见问题 自主排查");
+    }
+
     // ── 主事件循环 ──
     let ch = Channels { ffmpeg: ffmpeg_tx, bilibili: bilibili_tx, danmaku: danmaku_cmd_tx, irc_notify: irc_notify_tx };
-    run_loop(system, event_rx, ch, &local_ip, config).await
+    #[cfg(unix)]
+    let result = run_loop(system, event_rx, ch, &local_ip, config, &mut sigterm).await;
+    #[cfg(not(unix))]
+    let result = run_loop(system, event_rx, ch, &local_ip, config).await;
+
+    #[cfg(all(windows, feature = "dns-redirect"))]
+    pslinkb::dns::windows::windivert::shutdown();
+
+    result
 }
 
 // ————————————————————————————————————————————————————————————
@@ -163,16 +267,16 @@ async fn main() -> Result<(), AppError> {
 // ————————————————————————————————————————————————————————————
 
 #[cfg(feature = "cli")]
-fn load_config(args: &pslinkb::cli::Args) -> Result<(Config, std::path::PathBuf, Option<String>), AppError> {
+fn load_config(args: &pslinkb::cli::Args) -> Result<(Config, std::path::PathBuf, Option<String>, bool), AppError> {
     use std::path::PathBuf;
 
     let config_path = args.config.clone()
         .map(PathBuf::from)
         .unwrap_or_else(pslinkb::cli::default_config_path);
 
-    let config = if config_path.exists() {
+    let (config, created) = if config_path.exists() {
         eprintln!("[INFO] Loading config: {}", config_path.display());
-        Config::from_file(&config_path)?
+        (Config::from_file(&config_path)?, false)
     } else {
         log!(warn, "Config: Not found -  {}", config_path.display());
         let example = Config::default();
@@ -181,7 +285,7 @@ fn load_config(args: &pslinkb::cli::Args) -> Result<(Config, std::path::PathBuf,
         }
         example.to_file(&config_path)?;
         eprintln!("[INFO] Created default config: {}", config_path.display());
-        Config::default()
+        (Config::default(), true)
     };
 
     let mut config = config;
@@ -190,16 +294,19 @@ fn load_config(args: &pslinkb::cli::Args) -> Result<(Config, std::path::PathBuf,
         args.title.clone(),
         args.area.clone(),
         args.mode.as_ref().and_then(|s| s.parse().ok()),
+        #[cfg(windows)]
+        args.proxy.clone(),
+        args.ffmpeg.clone(),
     );
 
-    Ok((config, config_path, args.cookie.clone()))
+    Ok((config, config_path, args.cookie.clone(), created))
 }
 
 #[cfg(feature = "openwrt")]
 fn load_config() -> Result<(Config, std::path::PathBuf), AppError> {
     eprintln!("[INFO] OpenWrt mode - loading /etc/config/pslinkb");
     let config = Config::from_uci()?;
-    let path = std::path::PathBuf::from("/etc/pslinkb.toml");
+    let path = std::path::PathBuf::new();
     Ok((config, path))
 }
 
