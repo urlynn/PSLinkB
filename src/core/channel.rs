@@ -12,7 +12,6 @@ compile_error!("Must enable one of: channel-mpsc, channel-broadcast");
 #[derive(Debug, Clone)]
 pub enum DanmuMessage {
     Danmaku(Message),
-    Notify(String),
 }
 
 #[derive(Debug)]

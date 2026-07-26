@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 
 use crate::core::effect::Effect;
 
-/// 执行一个副作用（发送到对应 Worker channel）
+/// 执行一个副作用
 pub async fn dispatch(
     effect: Effect,
     ffmpeg_tx: &mpsc::Sender<crate::system::FfmpegCmd>,

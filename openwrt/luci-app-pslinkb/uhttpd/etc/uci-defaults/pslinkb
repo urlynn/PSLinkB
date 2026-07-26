@@ -1,7 +1,18 @@
 #!/bin/sh
 
+changed=0
+
 uci -q get uhttpd.main.ubus_prefix >/dev/null 2>&1 || {
 	uci set uhttpd.main.ubus_prefix='/ubus'
+	changed=1
+}
+
+[ "$(uci -q get uhttpd.main.no_ubusauth)" = "1" ] || {
+	uci set uhttpd.main.no_ubusauth='1'
+	changed=1
+}
+
+[ "$changed" = "1" ] && {
 	uci commit uhttpd
 	/etc/init.d/uhttpd restart 2>/dev/null || true
 }

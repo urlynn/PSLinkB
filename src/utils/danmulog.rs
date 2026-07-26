@@ -21,9 +21,6 @@ impl DanmakuFormatter {
                         eprintln!("[Danmaku:Fmt] {}", formatted);
                     }
                 }
-                Some(DanmuMessage::Notify(_)) => {
-                    // notifications go to PS5 via IRC, not terminal
-                }
                 None => break,
             }
         }
