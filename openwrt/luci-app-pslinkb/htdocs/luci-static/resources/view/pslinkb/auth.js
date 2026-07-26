@@ -4,14 +4,9 @@
 'require ui';
 'require uqr';
 
-var callStatus = rpc.declare({
+var callInitial = rpc.declare({
 	object: 'luci.pslinkb',
-	method: 'status_get'
-});
-
-var callDone = rpc.declare({
-	object: 'luci.pslinkb',
-	method: 'auth_done'
+	method: 'status_initial'
 });
 
 // ── 翻译 ──
@@ -32,9 +27,9 @@ var T = {};
 		T.REDIRECT = _('Redirecting to status page');
 
 		var self = this;
-		return callStatus().then(function(d) {
-			self._initQr = d.qr;
-			self._isLoggedIn = !!d.user;
+		return callInitial().then(function(state) {
+			self._initQr = state.qr && state.qr.url || '';
+			self._isLoggedIn = !!state.user;
 		}).catch(function() {
 			self._initQr = '';
 			self._isLoggedIn = false;
@@ -109,25 +104,25 @@ var T = {};
 		}
 
 		if (curQr) draw(curQr);
-
-		(function poll(){
-			callStatus().then(function(d) {
-				var st = d.qr_status || '';
-				if (st === 'scanned') {
-					titleEl.textContent = T.SCANNED;
-					setTimeout(poll, 200);
-					return;
+		
+		// uhttpd-mod-ubus notify: event=event.trigger, data={type:"pslinkb",data:{key,value}}
+		var es = new EventSource('/ubus/subscribe/service');
+		es.addEventListener('event.trigger', function(e) {
+			try {
+				var msg = JSON.parse(e.data);
+				if (msg.type !== 'pslinkb') return;
+				var data = msg.data;
+				if (data.key === 'qr') {
+					var qr = data.value || {};
+					if (qr.url && qr.url !== curQr) draw(qr.url);
+					if (qr.status === 'scanned' && titleEl) titleEl.textContent = T.SCANNED;
+					if (qr.status === 'done') {
+						titleEl.textContent = isLoggedIn ? T.FACE_DONE : T.DONE;
+						setTimeout(function() { location.href = statusUrl; }, 1000);
+					}
 				}
-				if (st === 'done') {
-					callDone();
-					titleEl.textContent = isLoggedIn ? T.FACE_DONE : T.DONE;
-					setTimeout(function() { location.href = statusUrl; }, 1000);
-					return;
-				}
-				if (d.qr && d.qr !== curQr) draw(d.qr);
-				setTimeout(poll, 500);
-			}).catch(function() { setTimeout(poll, 500); });
-		})();
+			} catch(_) {}
+		});
 
 		return E([]);
 	}

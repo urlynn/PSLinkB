@@ -99,38 +99,41 @@ fn print_qrcode_ascii(url: &str) {
 
 // —— OpenWRT 模式 ——
 
-// TODO-P0: qr_status 死代码待审查后移除 (Rust 只写不读，LuCI 也未读)
 #[cfg(feature = "openwrt")]
 pub async fn scan_qr_blocking(
     _config_path: &Path, _config: &crate::config::Config,
 ) -> Result<Vec<CookieEntry>, AppError> {
-    crate::luci::set("qr_status", "generating");
+    crate::luci::set("qr", r#"{"url":"","status":"generating"}"#);
     let mut scanned = false;
+    let qr_url = std::cell::Cell::new(None::<String>);
     let result = poll_qr(
         |url| {
-            crate::luci::set("qr_url", url);
-            crate::luci::set("qr_status", "waiting");
+            qr_url.set(Some(url.to_string()));
+            crate::luci::set("qr", &format!(r#"{{"url":"{}","status":"waiting"}}"#, url));
         },
         || {
-            if !scanned { crate::luci::set("qr_status", "scanned"); scanned = true; }
+            if !scanned {
+                if let Some(url) = qr_url.take() {
+                    crate::luci::set("qr", &format!(r#"{{"url":"{}","status":"scanned"}}"#, url));
+                }
+                scanned = true;
+            }
         },
-        |_| {}, 
+        |_| {},
     ).await;
 
     match &result {
         Ok(_) => {
-            crate::luci::set("qr_status", "confirmed");
-            crate::luci::clear("qr_url");
-            crate::luci::set("qr_status", "done");
+            crate::luci::set("qr", r#"{"url":"","status":"done"}"#);
         }
         Err(e) => {
             let msg = e.to_string();
-            if msg.contains("超时") || msg.contains("过期") {
-                crate::luci::set("qr_status", "expired");
+            let status = if msg.contains("超时") || msg.contains("过期") {
+                "expired"
             } else {
-                crate::luci::set("qr_status", &format!("error:{}", msg));
-            }
-            crate::luci::clear("qr_url");
+                return Ok(vec![]); 
+            };
+            crate::luci::set("qr", &format!(r#"{{"url":"","status":"{}"}}"#, status));
         }
     }
     result

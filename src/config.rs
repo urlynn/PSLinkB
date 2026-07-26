@@ -13,14 +13,22 @@ pub struct Config {
     pub live: LiveConfig,
     #[serde(default)]
     pub auth: AuthConfig,
-    /// CLI/Desktop: 自动 DNS 代理开关
+
     #[cfg(feature = "dns-redirect")]
     #[serde(default = "default_true")]
     pub dns_proxy: bool,
-    /// OpenWRT: 自动 DNS 重定向开关 (pslinkb.service.dns_redirect)
+
     #[cfg(feature = "openwrt")]
     #[serde(default = "default_true")]
     pub dns_redirect: bool,
+
+    #[cfg(all(feature = "cli", windows))]
+    #[serde(default)]
+    pub proxy: Option<String>,
+
+    #[cfg(feature = "cli")]
+    #[serde(default)]
+    pub ffmpeg: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,14 +39,17 @@ pub struct LiveConfig {
     #[serde(default)]
     pub title: String,
 
-    #[serde(default = "default_area_v2")]
+    #[serde(default)]
     pub area_v2: String,
+
+    #[serde(default = "default_area_name")]
+    pub area_name: String,
 
     #[serde(default)]
     pub live_mode: crate::core::blive::LiveMode,
 }
 
-/// 扫码登录成功后，init::ensure_cookie() 调用 Config::save_auth_cookies() 写回此段。
+/// 扫码登录成功后 init::ensure_cookie() 调用 Config::save_auth_cookies() 写回此段。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuthConfig {
     #[serde(default)]
@@ -61,8 +72,8 @@ pub struct CookieEntry {
 fn default_true() -> bool { true }
 fn default_room_id() -> u64 { 0 }
 
-fn default_area_v2() -> String {
-    "237".to_string()
+fn default_area_name() -> String {
+    "主机游戏".to_string()
 }
 /// 构造 RTMP URL
 pub fn rtmp_url(host: &str, app: &str, key: &str) -> String {
@@ -78,6 +89,10 @@ impl Default for Config {
             dns_proxy: true,
             #[cfg(feature = "openwrt")]
             dns_redirect: true,
+            #[cfg(all(feature = "cli", windows))]
+            proxy: None,
+            #[cfg(feature = "cli")]
+            ffmpeg: None,
         }
     }
 }
@@ -87,7 +102,8 @@ impl Default for LiveConfig {
         Self {
             room_id: default_room_id(),
             title: String::new(),
-            area_v2: default_area_v2(),
+            area_v2: String::new(),
+            area_name: default_area_name(),
             live_mode: crate::core::blive::LiveMode::default(),
         }
     }
@@ -158,6 +174,9 @@ impl Config {
         title: Option<String>,
         area: Option<String>,
         mode: Option<crate::core::blive::LiveMode>,
+        #[cfg(windows)]
+        proxy: Option<String>,
+        ffmpeg: Option<String>,
     ) {
         if let Some(id) = room_id {
             self.live.room_id = id;
@@ -171,9 +190,15 @@ impl Config {
         if let Some(m) = mode {
             self.live.live_mode = m;
         }
+        #[cfg(windows)]
+        if let Some(p) = proxy {
+            self.proxy = Some(p);
+        }
+        if let Some(f) = ffmpeg {
+            self.ffmpeg = Some(f);
+        }
     }
 
-    /// 保存 room_id 到配置文件（桌面 TOML）
     #[cfg(feature = "cli")]
     pub fn save_room_id(path: &std::path::Path, room_id: u64) -> Result<(), AppError> {
         let mut config = Self::from_file(path).unwrap_or_default();
@@ -181,11 +206,31 @@ impl Config {
         config.to_file(path)
     }
 
-    /// 保存 room_id 到 UCI（OpenWRT）
+    #[cfg(feature = "cli")]
+    pub fn save_area_v2(path: &std::path::Path, area_v2: &str) -> Result<(), AppError> {
+        let mut config = Self::from_file(path).unwrap_or_default();
+        config.live.area_v2 = area_v2.to_string();
+        config.to_file(path)
+    }
+
     #[cfg(feature = "openwrt")]
     pub fn save_room_id(room_id: u64) -> Result<(), AppError> {
         use std::process::Command;
         let set = format!("pslinkb.@live[0].room_id={}", room_id);
+        let out = Command::new("uci").args(["set", &set]).output()
+            .map_err(|e| AppError::General(format!("uci set: {}", e)))?;
+        if !out.status.success() {
+            return Err("uci set failed".into());
+        }
+        Command::new("uci").args(["commit", "pslinkb"]).output()
+            .map_err(|e| AppError::General(format!("uci commit: {}", e)))?;
+        Ok(())
+    }
+
+    #[cfg(feature = "openwrt")]
+    pub fn save_area_v2(area_v2: &str) -> Result<(), AppError> {
+        use std::process::Command;
+        let set = format!("pslinkb.@live[0].area_v2={}", area_v2);
         let out = Command::new("uci").args(["set", &set]).output()
             .map_err(|e| AppError::General(format!("uci set: {}", e)))?;
         if !out.status.success() {

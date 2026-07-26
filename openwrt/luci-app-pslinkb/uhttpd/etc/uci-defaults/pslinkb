@@ -1,0 +1,8 @@
+#!/bin/sh
+
+uci -q get uhttpd.main.ubus_prefix >/dev/null 2>&1 || {
+	uci set uhttpd.main.ubus_prefix='/ubus'
+	uci commit uhttpd
+	/etc/init.d/uhttpd restart 2>/dev/null || true
+}
+exit 0

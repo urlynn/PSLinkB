@@ -2,17 +2,13 @@
 'require view';
 'require rpc';
 'require ui';
+'require uci';
 
 // ── rpcd ────────────────────────────────
 
-var callStatus = rpc.declare({
+var callInitial = rpc.declare({
 	object: 'luci.pslinkb',
-	method: 'status_get'
-});
-
-var callDnsStatus = rpc.declare({
-	object: 'luci.pslinkb',
-	method: 'dns_status_get'
+	method: 'status_initial'
 });
 
 var callAppInfo = rpc.declare({
@@ -45,94 +41,16 @@ var callSvcRestart = rpc.declare({
 	method: 'svc_restart'
 });
 
+var callSvcStatus = rpc.declare({
+	object: 'luci.pslinkb',
+	method: 'svc_status'
+});
+
 var callDnsToggle = rpc.declare({
 	object: 'luci.pslinkb',
 	method: 'dns_toggle',
 	params: ['val']
 });
-
-// ── CSS ─────────────────────────────────
-
-var STYLE = ''
-+ '.pslinkb{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:100%;box-sizing:border-box}'
-+ '.pslinkb *,.pslinkb *::before,.pslinkb *::after{box-sizing:border-box}'
-+ '.pslinkb .ps-card{padding:14px 16px!important;margin:0!important;border:0!important}'
-+ '.pslinkb .ps-subcard{display:flex;flex-direction:column;padding:10px 12px!important;gap:0;margin:0!important;border:0!important}'
-+ '.pslinkb .dual-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;border-radius:inherit}'
-+ '.pslinkb .status-item{background:rgba(128,128,128,0.06);border:1px solid rgba(128,128,128,0.10);border-radius:inherit;padding:16px 18px;text-align:center}'
-+ '.pslinkb .status-item .si-name{font-size:11px;opacity:0.6;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;font-weight:500}'
-+ '.pslinkb .status-item .si-state{font-size:13px;font-weight:600;color:#2dce89;display:flex;align-items:center;justify-content:center;gap:6px}'
-+ '.pslinkb .status-item .si-state::before{content:"";width:6px;height:6px;border-radius:50%;background:#2dce89;flex-shrink:0}'
-+ '.pslinkb .status-item.stopped .si-state{color:#f5365c;opacity:0.8}'
-+ '.pslinkb .status-item.stopped .si-state::before{background:#f5365c;opacity:0.8}'
-+ '.pslinkb .status-item.waiting .si-state{color:#fb6340}'
-+ '.pslinkb .status-item.waiting .si-state::before{background:#fb6340;animation:pslinkb-pulse 1.2s ease-in-out infinite}'
-+ '.pslinkb .status-item.checking .si-state{color:#5e72e4}'
-+ '.pslinkb .status-item.checking .si-state::before{background:#5e72e4;animation:pslinkb-pulse 0.8s ease-in-out infinite}'
-+ '.pslinkb .control-row{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;border-radius:inherit}'
-+ '.pslinkb .dns-label{font-size:14px;font-weight:600;display:inline-block;min-width:56px;text-align:right}'
-+ '.pslinkb .dns-label-row{display:flex;align-items:center;gap:8px;flex:1;min-width:0;border-radius:inherit}'
-+ '.pslinkb .status-pill{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:inherit;font-size:11px;font-weight:600;white-space:nowrap;background:rgba(128,128,128,0.10);border:1px solid rgba(128,128,128,0.18)}'
-+ '.pslinkb .status-pill::before{content:"";width:6px;height:6px;border-radius:50%;flex-shrink:0;background:rgba(128,128,128,0.5)}'
-+ '.pslinkb .status-pill.running{color:#2dce89;border-color:rgba(45,206,137,0.2);background:rgba(45,206,137,0.08)}'
-+ '.pslinkb .status-pill.running::before{background:#2dce89}'
-+ '.pslinkb .status-pill.stopped{color:#f5365c;border-color:rgba(245,54,92,0.2);background:rgba(245,54,92,0.08)}'
-+ '.pslinkb .status-pill.stopped::before{background:#f5365c}'
-+ '.pslinkb .control-bar{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid rgba(128,128,128,0.12)}'
-+ '.pslinkb .control-bar .err-msg{margin-right:auto}'
-+ '.pslinkb .control-bar.control-bar-left{justify-content:flex-start}'
-+ '.pslinkb .card-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;border-radius:inherit;min-width:0}'
-+ '.pslinkb .card-title{font-size:14px;font-weight:600;white-space:nowrap}'
-+ '.pslinkb .card-meta{display:flex;align-items:center;gap:5px;font-size:11px;opacity:0.5;flex-shrink:0}'
-+ '.pslinkb .live-dot{width:6px;height:6px;border-radius:50%;background:#22c55e;flex-shrink:0;animation:pslinkb-pulse 2s ease-in-out infinite}'
-+ '@keyframes pslinkb-pulse{0%,100%{opacity:1}50%{opacity:0.35}}'
-+ '.pslinkb .badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:inherit;font-size:12px;font-weight:600;white-space:nowrap}'
-+ '.pslinkb .badge-success{color:#2dce89;background:rgba(45,206,137,0.1)}'
-+ '.pslinkb .badge-warning{color:#fb6340;background:rgba(251,99,64,0.1)}'
-+ '.pslinkb .badge-info{color:#5e72e4;background:rgba(94,114,228,0.1)}'
-+ '.pslinkb .badge-error{color:#f5365c;background:rgba(245,54,92,0.1)}'
-+ '.pslinkb .badge-muted{color:#8898aa;background:rgba(128,128,128,0.12)}'
-+ '.pslinkb .toggle-group{display:flex;align-items:center;gap:6px;flex-shrink:0}'
-+ '.pslinkb .toggle-switch{position:relative;display:inline-block;width:44px;height:24px;cursor:pointer;flex-shrink:0}'
-+ '.pslinkb .toggle-switch input{position:absolute;opacity:0;width:0;height:0}'
-+ '.pslinkb .toggle-slider{position:absolute;top:0;left:0;right:0;bottom:0;background-color:rgba(128,128,128,0.35);transition:background 0.25s ease;border-radius:24px}'
-+ '.pslinkb .toggle-slider::before{content:"";position:absolute;height:18px;width:18px;left:3px;top:3px;background:#fff;transition:transform 0.25s cubic-bezier(0.34,1.56,0.64,1);border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,0.2)}'
-+ '.pslinkb .toggle-switch input:checked+.toggle-slider{background-color:#2dce89}'
-+ '.pslinkb .toggle-switch input:checked+.toggle-slider::before{transform:translateX(20px)}'
-+ '.pslinkb .toggle-switch.processing .toggle-slider{background-color:#fb6340!important;animation:pulse 0.8s ease-in-out infinite}'
-+ '.pslinkb .toggle-switch.processing input:checked+.toggle-slider{background-color:#2dce89!important;animation:pulse 0.8s ease-in-out infinite}'
-+ '.pslinkb .toggle-switch input:disabled+.toggle-slider{opacity:0.3;cursor:not-allowed}'
-+ '.pslinkb .toggle-switch input:disabled+.toggle-slider::before{opacity:0.5}'
-+ '@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}'
-+ '.pslinkb .status-pill.ps-processing{background:rgba(128,128,128,0.12);border-color:rgba(128,128,128,0.25);color:#8898aa}'
-+ '.pslinkb .status-pill.ps-processing::before{background:#fb6340;animation:pulse 0.8s ease-in-out infinite}'
-+ '.pslinkb .icon-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:1px solid rgba(128,128,128,0.2);border-radius:8px;background:rgba(128,128,128,0.06);cursor:pointer;padding:0;flex-shrink:0;transition:all 0.15s ease}'
-+ '.pslinkb .icon-btn:hover{border-color:rgba(128,128,128,0.35)}'
-+ '.pslinkb .icon-btn:active{transform:scale(0.95)}'
-+ '.pslinkb .icon-btn:disabled{opacity:0.4;cursor:not-allowed}'
-+ '.pslinkb .icon-btn:disabled:hover{border-color:rgba(128,128,128,0.2)}'
-+ '.pslinkb .icon-btn svg{width:15px;height:15px;opacity:0.5}'
-+ '.pslinkb .err-msg{display:none;font-size:12px;color:#f5365c;flex:1;min-width:0}'
-+ '.pslinkb .icon-btn:hover svg{opacity:0.8}'
-+ '.pslinkb .domain-list{font-size:12px;opacity:0.5;height:32px;display:flex;align-items:center}'
-+ '.pslinkb .dns-detail{flex:1;font-size:11px;padding:4px 0 0 0;display:flex;align-items:center;gap:4px}'
-+ '.pslinkb .dns-dot{display:inline-block;font-size:12px;font-weight:600;flex-shrink:0;line-height:1}'
-+ '.pslinkb .dns-dot.ok{color:#2dce89}'
-+ '.pslinkb .dns-dot.fail{color:#f5365c}'
-+ '.pslinkb .dns-pill{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:500;border:1px solid;font-family:"JetBrains Mono",monospace}'
-+ '.pslinkb .dns-pill.ok{color:#2dce89;border-color:rgba(45,206,137,0.25);background:rgba(45,206,137,0.06)}'
-+ '.pslinkb .dns-pill.fail{color:#f5365c;border-color:rgba(245,54,92,0.25);background:rgba(245,54,92,0.06)}'
-+ '.pslinkb .dns-arrow{opacity:0.3;margin:0 2px}'
-+ '.pslinkb .dns-ip{font-family:"JetBrains Mono",monospace;font-size:11px}'
-+ '.pslinkb .dns-ip.ok{color:#2dce89}'
-+ '.pslinkb .dns-ip.fail{color:#f5365c}'
-+ '.pslinkb .dns-ip.muted{color:#8898aa;opacity:0.8}'
-+ '.pslinkb-ver{float:right!important;opacity:0.6;white-space:nowrap}'
-+ '.pslinkb-ver a{color:inherit;text-decoration:none}'
-+ '.pslinkb-ver-new{font-size:0.6em;vertical-align:super;color:#f5365c;font-weight:600;margin-left:1px;opacity:1;animation:pslinkb-pulse 0.8s ease-in-out 3}'
-+ '@media(max-width:640px){.pslinkb{grid-template-columns:1fr;gap:8px}.pslinkb .ps-card{padding:10px 12px!important}.pslinkb .card-title{font-size:13px}.pslinkb .badge{font-size:11px;padding:1px 8px}.pslinkb .icon-btn{width:28px;height:28px}.pslinkb .icon-btn svg{width:13px;height:13px}.pslinkb .si-state{font-size:13px}}'
-+ '.ps-dialog,.ps-dialog h3,.ps-dialog p{color:var(--cbi-main-fg,#5c6a72)}'
-+ '@media(prefers-color-scheme:dark){.ps-dialog,.ps-dialog h3,.ps-dialog p{color:var(--cbi-main-fg,#d3c6aa)}}';
 
 var RESTART_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21.5 2v6h-6"/><path d="M2.5 22v-6h6"/><path d="M2 11.5a10 10 0 0 1 18.8-4.3"/><path d="M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>';
 
@@ -173,28 +91,33 @@ return view.extend({
 		T.CHECKING = _('Checking'); T.CLOSING = _('Closing');
 		T.STREAMING = _('Streaming'); T.CRASHED = _('Crashed');
 		T.RESTARTING = _('Restarting'); T.READY = _('Ready');
+		T.NOTINSTALLED = _('Not installed');
 
 		if (!document.getElementById('pslinkb-css')) {
-			var ss = h('style', { id: 'pslinkb-css', innerHTML: STYLE });
-			document.head.appendChild(ss);
+			var link = document.createElement('link');
+			link.id = 'pslinkb-css';
+			link.rel = 'stylesheet';
+			link.href = L.resource('view/pslinkb/status.css');
+			document.head.appendChild(link);
 		}
 
 		return Promise.all([
-			callStatus().catch(function() { return null; }),
-			callDnsStatus().catch(function() { return null; }),
-			callAppInfo().catch(function() { return { ver: '', luci_ver: '', latest_ver: '', latest_luci: '', pslinkb_url: '', luci_url: '', pkg_type: '', binary_installed: false }; })
+			callInitial().catch(function() { return null; }),
+			callAppInfo().catch(function() { return { ver: '', luci_ver: '', latest_ver: '', latest_luci: '', pslinkb_url: '', luci_url: '', pkg_type: '', binary_installed: false }; }),
+			uci.load('pslinkb').catch(function() {})
 		]).then(function(results) {
-			window._pslinkbInit = {
-				svc: results[0],
-				dns: results[1],
-				info: results[2]
+			var state = results[0] || {};
+			var mode = uci.get('pslinkb', '@live[0]', 'live_mode') || 'auto';
+			window._pslinkbData = {
+				state: state,
+				mode: mode,
+				info: results[1]
 			};
 		});
 	},
 
 	render: function() {
-		var d = window._pslinkbInit || {};
-		if (d.svc) this._lastRunning = d.svc.running;
+		var d = window._pslinkbData || {};
 		var self = this;
 
 		setTimeout(function() {
@@ -211,10 +134,10 @@ return view.extend({
 
 	addFooter: function() {
 		var self = this;
-		var d2 = window._pslinkbInit || {};
-		var info = d2.info || {};
-		var verTxt = info.ver ? 'PSLinkB v' + info.ver : 'PSLinkB N/A';
-		var appTxt = 'Luci v' + (info.luci_ver || '?');
+		var d = window._pslinkbData || {};
+		var info = d.info || {};
+		var verTxt = (info.binary_installed !== false && info.ver) ? 'PSLinkB v' + info.ver : 'PSLinkB N/A';
+		var appTxt = info.luci_ver ? 'Luci v' + info.luci_ver : 'Luci N/A';
 		var pslinkb_url = info.pslinkb_url || '#';
 		var luci_url = info.luci_url || '#';
 
@@ -261,15 +184,20 @@ return view.extend({
 				'<a href="' + luci_url + '" target="_blank">' + appTxt + '</a>';
 		}
 
-		this._statusInterval = setInterval(function() {
-			callStatus().then(function(d) { self._updateSvc(d); }).catch(function() {});
-		}, 500);
-		this._dnsInterval = setInterval(function() {
-			callDnsStatus().then(function(d) { self._updateDns(d); }).catch(function() {});
-		}, 500);
+		self._updateSvc(d.state || {}, d.mode || 'auto');
+
+		// uhttpd-mod-ubus notify: event=event.trigger, data={type:"pslinkb",data:{key,value}}
+		var es = new EventSource('/ubus/subscribe/service');
+		es.addEventListener('event.trigger', function(e) {
+			try {
+				var msg = JSON.parse(e.data);
+				if (msg.type !== 'pslinkb') return;
+				self._applyPush(msg.data);
+			} catch(_) {}
+		});
 
 		// 本地版本
-		var info2 = (window._pslinkbInit || {}).info || {};
+		var info = (window._pslinkbData || {}).info || {};
 		var _inject = function() {
 			var m = document.getElementById('tabmenu');
 			if (!m) return false;
@@ -280,17 +208,17 @@ return view.extend({
 				li.className = 'pslinkb-ver';
 				ul.appendChild(li);
 			}
-			self._renderVer(li, info2.ver || '', info2.luci_ver || '', '', '', info2);
+			self._renderVer(li, info.ver || '', info.luci_ver || '', '', '', info);
 			// 远端版本
 			var cached = sessionStorage.getItem('_pslinkbVer2');
 			if (cached) {
 				var v = JSON.parse(cached);
-				self._renderVer(li, info2.ver || '', info2.luci_ver || '', v.latest_ver || '', v.latest_luci || '', info2);
+				self._renderVer(li, info.ver || '', info.luci_ver || '', v.latest_ver || '', v.latest_luci || '', info);
 			} else {
 				callCheckUpdates().then(function(r) {
 					var data = { latest_ver: (r && r.latest_ver) ? r.latest_ver : '', latest_luci: (r && r.latest_luci) ? r.latest_luci : '' };
 					sessionStorage.setItem('_pslinkbVer2', JSON.stringify(data));
-					self._renderVer(li, info2.ver || '', info2.luci_ver || '', data.latest_ver, data.latest_luci, info2);
+					self._renderVer(li, info.ver || '', info.luci_ver || '', data.latest_ver, data.latest_luci, info);
 				}).catch(function() {});
 			}
 			return true;
@@ -301,11 +229,6 @@ return view.extend({
 			});
 			obs.observe(document.body, { childList: true, subtree: true });
 			setTimeout(function() { obs.disconnect(); }, 5000);
-		}
-
-		// 未安装检测
-		if (!info2.binary_installed) {
-			self._showInstallDialog('pslinkb', info2.ver || '?', true);
 		}
 
 		return E([]);
@@ -444,41 +367,47 @@ return view.extend({
 	},
 
 	_svcCard: function(d) {
-		var svc = (d && d.svc) || {};
-		var running = svc.running || false;
+		var state = (d && d.state) || {};
+		var mode = d.mode || 'auto';
+		var info = (d && d.info) || {};
+		var live = state.live || {};
+		var status = live.status || '';
+		var psInstalled = info.binary_installed !== false;
+		var strInstalled = info.stream_installed !== false;
 		var strTxt, strCls;
-		if (svc.mode === 'manual' && running) {
-			strTxt = svc.rtmp ? T.READY : T.IDLE;
-			strCls = svc.rtmp ? '' : 'stopped';
-		} else if (svc.stream_crashed) {
-			strTxt = T.CRASHED; strCls = 'stopped';
-		} else if (svc.streaming) {
+		if (!strInstalled) { strTxt = T.NOTINSTALLED; strCls = 'notinstalled'; }
+		else if (mode === 'manual') {
+			strTxt = status ? T.READY : T.IDLE;
+			strCls = status ? '' : 'stopped';
+		} else if (status === 'live') {
 			strTxt = T.STREAMING; strCls = '';
+		} else if (status === 'timeout' || status === 'offline') {
+			strTxt = T.TIMEOUT; strCls = 'stopped';
+		} else if (status === 'fake' || status === 'probing') {
+			strTxt = T.CHK; strCls = 'checking';
 		} else {
 			strTxt = T.IDLE; strCls = 'stopped';
 		}
+		var psItem = h('div', { className: 'status-item js-svc' + (psInstalled ? '' : ' notinstalled') }, [
+			h('div', { className: 'si-name' }, 'PSLinkB'),
+			h('div', { className: 'si-state js-svc-state' }, psInstalled ? T.RUN : T.NOTINSTALLED)
+		]);
+		var strItem = h('div', { className: 'status-item js-str ' + strCls }, [
+			h('div', { className: 'si-name' }, 'Stream'),
+			h('div', { className: 'si-state js-str-state' }, strTxt)
+		]);
 		return h('div', { className: 'cbi-section ps-subcard' }, [
-			h('div', { className: 'dual-row' }, [
-				h('div', { className: 'status-item js-svc' + (running ? '' : ' stopped') }, [
-					h('div', { className: 'si-name' }, 'PSLinkB'),
-					h('div', { className: 'si-state js-svc-state' }, running ? T.RUN : T.STOP)
-				]),
-				h('div', { className: 'status-item js-str ' + strCls }, [
-					h('div', { className: 'si-name' }, 'Stream'),
-					h('div', { className: 'si-state js-str-state' }, strTxt)
-				])
-			]),
+			h('div', { className: 'dual-row' }, [ psItem, strItem ]),
 			h('div', { className: 'control-bar' }, [
 				h('span', { className: 'err-msg js-err' }),
-				this._toggleBtn('svc', running),
+				this._toggleBtn('svc', true),
 				this._restartBtn()
 			])
 		]);
 	},
 
 	_dnsCard: function(d) {
-		var dns = (d && d.dns) || {};
-		var running = (d && d.svc) ? d.svc.running : false;
+		var dns = (d && d.state && d.state.dns) || {};
 		var pillTxt = '', pillCls = '';
 		if (dns.checking) {
 			pillTxt = dns.enabled ? T.CHECKING : T.CLOSING; pillCls = 'ps-processing';
@@ -494,7 +423,7 @@ return view.extend({
 					h('span', { className: 'status-pill js-dns-pill ' + pillCls }, pillTxt)
 				]),
 				h('div', { className: 'toggle-group' }, [
-					this._toggleBtn('dns', dns.enabled, !running)
+					this._toggleBtn('dns', dns.enabled, false)
 				])
 			]),
 			h('div', { className: 'dns-detail js-dns-ip', style: 'min-height:22px', innerHTML: this._dnsIpHtml(dns) }),
@@ -505,8 +434,8 @@ return view.extend({
 	},
 
 	_loginCard: function(d) {
-		var svc = (d && d.svc) || {};
-		var user = svc.user || '';
+		var state = (d && d.state) || {};
+		var user = state.user || '';
 		return h('div', { className: 'cbi-section ps-card' }, [
 			h('div', { className: 'card-row' }, [
 				h('span', { className: 'card-title' }, _('Login')),
@@ -516,9 +445,12 @@ return view.extend({
 	},
 
 	_liveCard: function(d) {
-		var svc = (d && d.svc) || {};
-		if (svc.mode === 'manual') {
-			var url = svc.rtmp || '';
+		var state = (d && d.state) || {};
+		var mode = d.mode || 'auto';
+		var live = state.live || {};
+		var status = live.status || '';
+		if (mode === 'manual') {
+			var url = status.indexOf('rtmp://') === 0 ? status : '';
 			var cl = url ? 'badge-success' : 'badge-muted';
 			var badge = h('span', {
 				className: 'badge js-push-url ' + cl,
@@ -553,11 +485,10 @@ return view.extend({
 				])
 			]);
 		}
-		var str = svc.stream || '';
 		var badgeMap = { live: 'badge-success', fake: 'badge-warning', probing: 'badge-info', timeout: 'badge-error', offline: 'badge-error' };
 		var textMap = { live: T.AVL, fake: T.PEND, probing: T.CHK, timeout: T.TIMEOUT, offline: T.TIMEOUT };
-		var cl = badgeMap[str] || 'badge-muted';
-		var txt = textMap[str] || T.IDLE;
+		var cl = badgeMap[status] || 'badge-muted';
+		var txt = textMap[status] || T.IDLE;
 		return h('div', { className: 'cbi-section ps-card js-live-card' }, [
 			h('div', { className: 'card-row' }, [
 				h('span', { className: 'card-title' }, _('Live Status')),
@@ -604,6 +535,7 @@ return view.extend({
 	},
 
 	_handleToggle: function(ev) {
+		var self = this;
 		var inp = ev.target;
 		var on = inp.checked;
 		var id = inp.getAttribute('data-toggle');
@@ -616,9 +548,12 @@ return view.extend({
 			if (svcStEl) svcStEl.textContent = on ? T.STARTING : T.STOPPING;
 			var svcEl = document.querySelector('.js-svc');
 			if (svcEl) { svcEl.classList.remove('stopped'); svcEl.classList.add('waiting'); }
-			(on ? callSvcStart : callSvcStop)().catch(function() {
-				inp.disabled = false;
-			});
+			(on ? callSvcStart : callSvcStop)().then(function() {
+			//SSE running 到达时由 _applyPush 清空
+			inp.disabled = false;
+		}).catch(function() {
+			inp.disabled = false;
+		});
 		} else if (id === 'dns') {
 			if (inp.disabled) { inp.checked = !on; return; }
 			inp.disabled = true;
@@ -630,60 +565,75 @@ return view.extend({
 		}
 	},
 
-	_updateSvc: function(d) {
-		this._lastRunning = d.running;
+	_updateSvc: function(state, mode) {
+		mode = mode || this._mode || 'auto';
+		this._mode = mode;
+
+		var live = state.live || {};
+		var status = live.status || '';
+		var running = state.running === true;
+
+		var info = (window._pslinkbData || {}).info || {};
+		var psInstalled = info.binary_installed !== false;
+		var strInstalled = info.stream_installed !== false;
 
 		if (this._restarting) {
-			if (Date.now() - this._restarting > 2000 && d.running) {
+			if (Date.now() - this._restarting > 2000 && running) {
 				this._restarting = null;
 				var rSvc = document.querySelector('.js-svc');
 				if (rSvc) rSvc.classList.remove('waiting');
 				var rTg = document.querySelector('[data-toggle="svc"]'); if (rTg) rTg.disabled = false;
 				var rBtn = document.querySelector('.js-restart-btn'); if (rBtn) rBtn.disabled = false;
-			} else {
-				return;
-			}
+			} else { return; }
 		}
 
 		var isManual = this._svcManual && Date.now() - this._svcManual < 5000;
-		var svcEl = document.querySelector('.js-svc');
-		if (svcEl && !isManual) {
-			svcEl.classList.remove('waiting');
-			if (d.running) svcEl.classList.remove('stopped');
-			else svcEl.classList.add('stopped');
+
+		if (psInstalled) {
+			var svcEl = document.querySelector('.js-svc');
+			if (svcEl && !this._svcManual) {
+				svcEl.classList.remove('waiting');
+				if (running) svcEl.classList.remove('stopped');
+				else svcEl.classList.add('stopped');
+			}
+			var svcSt = document.querySelector('.js-svc-state');
+			if (svcSt && !this._svcManual) svcSt.textContent = running ? T.RUN : T.STOP;
 		}
-		var svcSt = document.querySelector('.js-svc-state');
-		if (svcSt && !isManual) svcSt.textContent = d.running ? T.RUN : T.STOP;
 		var svcToggle = document.querySelector('[data-toggle="svc"]');
 		if (svcToggle) {
-			if (!this._svcManual || Date.now() - this._svcManual > 5000) {
-				svcToggle.checked = d.running;
-				svcToggle.disabled = false;
-				svcToggle.disabled = false;
-				var svcSw = svcToggle.parentElement;
-				if (svcSw) svcSw.classList.remove('processing');
+			if (!this._svcManual) {
+				svcToggle.checked = running;
 			}
+			svcToggle.disabled = false;
+			var svcSw = svcToggle.parentElement;
+			if (svcSw) svcSw.classList.remove('processing');
 		}
 
 		var strTxt, strCls;
-		if (d.mode === 'manual' && d.running) {
-			strTxt = d.rtmp ? T.READY : T.IDLE;
-			strCls = d.rtmp ? '' : 'stopped';
-		} else if (d.stream_crashed) {
-			strTxt = T.CRASHED; strCls = 'stopped';
-		} else if (d.streaming) {
+		if (mode === 'manual') {
+			var hasUrl = status.indexOf('rtmp://') === 0;
+			strTxt = hasUrl ? T.READY : T.IDLE;
+			strCls = hasUrl ? '' : 'stopped';
+		} else if (status === 'live') {
 			strTxt = T.STREAMING; strCls = '';
+		} else if (status === 'timeout' || status === 'offline') {
+			strTxt = T.TIMEOUT; strCls = 'stopped';
+		} else if (status === 'fake' || status === 'probing') {
+			strTxt = T.CHK; strCls = 'checking';
 		} else {
 			strTxt = T.IDLE; strCls = 'stopped';
 		}
-		var strEl = document.querySelector('.js-str');
-		if (strEl) { strEl.classList.remove('stopped', 'waiting', 'checking'); if (strCls) strEl.classList.add(strCls); }
-		var strSt = document.querySelector('.js-str-state');
-		if (strSt) strSt.textContent = strTxt;
+
+		if (strInstalled) {
+			var strEl = document.querySelector('.js-str');
+			if (strEl) { strEl.classList.remove('stopped', 'waiting', 'checking'); if (strCls) strEl.classList.add(strCls); }
+			var strSt = document.querySelector('.js-str-state');
+			if (strSt) strSt.textContent = strTxt;
+		}
 
 		var userEl = document.querySelector('.js-user');
 		if (userEl) {
-			var u = d.user || '';
+			var u = state.user || '';
 			var us = userEl.querySelector('span');
 			if (us) us.textContent = u || T.NLOGIN;
 			userEl.classList.remove('badge-success', 'badge-error');
@@ -691,43 +641,38 @@ return view.extend({
 		}
 		var streamEl = document.querySelector('.js-stream-badge');
 		if (streamEl) {
-			var st = d.stream || '';
 			var cl = 'badge-muted', txt = T.IDLE;
-			if (st === 'live') { cl = 'badge-success'; txt = T.AVL; }
-			else if (st === 'fake') { cl = 'badge-warning'; txt = T.PEND; }
-			else if (st === 'probing') { cl = 'badge-info'; txt = T.CHK; }
-			else if (st === 'timeout' || st === 'offline') { cl = 'badge-error'; txt = T.TIMEOUT; }
+			if (status === 'live') { cl = 'badge-success'; txt = T.AVL; }
+			else if (status === 'fake') { cl = 'badge-warning'; txt = T.PEND; }
+			else if (status === 'probing') { cl = 'badge-info'; txt = T.CHK; }
+			else if (status === 'timeout' || status === 'offline') { cl = 'badge-error'; txt = T.TIMEOUT; }
 			streamEl.classList.remove('badge-success', 'badge-warning', 'badge-info', 'badge-error', 'badge-muted');
 			streamEl.classList.add(cl);
 			var ss = streamEl.querySelector('span');
 			if (ss) ss.textContent = txt;
 		}
 		var puEl = document.querySelector('.js-push-url');
-		if (puEl) {
-			var pu = d.rtmp || '';
-			puEl.textContent = pu || T.IDLE;
-			puEl.setAttribute('data-url', pu);
-			puEl.title = pu ? _('Click to copy') : '';
-			puEl.style.cursor = pu ? 'pointer' : '';
+		if (puEl && mode === 'manual') {
+			var url = status.indexOf('rtmp://') === 0 ? status : '';
+			puEl.textContent = url || T.IDLE;
+			puEl.setAttribute('data-url', url);
+			puEl.title = url ? _('Click to copy') : '';
+			puEl.style.cursor = url ? 'pointer' : '';
 			puEl.classList.remove('badge-success', 'badge-muted');
-			puEl.classList.add(pu ? 'badge-success' : 'badge-muted');
+			puEl.classList.add(url ? 'badge-success' : 'badge-muted');
 		}
 		var errEl = document.querySelector('.js-err');
-		if (errEl) { errEl.style.display = d.error ? 'inline-block' : 'none'; errEl.textContent = d.error || ''; }
+		if (errEl) { errEl.style.display = state.error ? 'inline-block' : 'none'; errEl.textContent = state.error || ''; }
 
-		if (d.running && d.qr && sessionStorage.getItem('_pslinkb_from_auth') !== '1') {
+		// QR 跳转检测
+		var qr = state.qr || {};
+		if (qr.url && qr.status === 'waiting' && sessionStorage.getItem('_pslinkb_from_auth') !== '1') {
 			location.href = L.env.scriptname + '/admin/services/pslinkb/auth';
 		}
-		if (!d.qr) {
-			sessionStorage.removeItem('_pslinkb_from_auth');
-		} else {
-			if (sessionStorage.getItem('_pslinkb_from_auth') !== '1') {
-				sessionStorage.setItem('_pslinkb_from_auth', '1');
-			}
-		}
+		if (!qr.url) sessionStorage.removeItem('_pslinkb_from_auth');
 
 		var dnsToggle = document.querySelector('[data-toggle="dns"]');
-		if (dnsToggle && typeof this._dnsTarget === 'undefined') dnsToggle.disabled = !d.running;
+		if (dnsToggle && typeof this._dnsTarget === 'undefined') dnsToggle.disabled = !running;
 	},
 
 	_dnsIpHtml: function(dns) {
@@ -738,8 +683,33 @@ return view.extend({
 		return '';
 	},
 
+	_applyPush: function(data) {
+		var d = window._pslinkbData || {};
+		var state = d.state || {};
+		var mode = d.mode || 'auto';
+
+		if (data.key === 'live') {
+			state.live = data.value || {};
+			this._updateSvc(state, mode);
+		} else if (data.key === 'qr') {
+			state.qr = data.value || {};
+			this._updateSvc(state, mode);
+		} else if (data.key === 'user') {
+			state.user = data.value || '';
+			this._updateSvc(state, mode);
+		} else if (data.key === 'error') {
+			state.error = data.value || '';
+			this._updateSvc(state, mode);
+		} else if (data.key === 'running') {
+			state.running = data.value;
+			this._svcManual = null;
+			this._updateSvc(state, mode);
+		} else if (data.key === 'dns') {
+			state.dns = data.value || {};
+			this._updateDns(state.dns);
+		}
+	},
 	_updateDns: function(d) {
-		if (this._lastRunning !== true) return;
 		var pill = document.querySelector('.js-dns-pill');
 		var pillManual = this._dnsManual && Date.now() - this._dnsManual < 800;
 		if (pill && !pillManual) {

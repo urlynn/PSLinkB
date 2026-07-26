@@ -1,0 +1,15 @@
+#!/bin/sh
+
+uci -q get uhttpd.pslinkb >/dev/null 2>&1 || {
+	uci set uhttpd.pslinkb=uhttpd
+	uci add_list uhttpd.pslinkb.listen_http='127.0.0.1:6668'
+	uci set uhttpd.pslinkb.ubus_prefix='/ubus'
+	uci set uhttpd.pslinkb.no_ubusauth='1'
+	uci set uhttpd.pslinkb.home='/www'
+	uci set uhttpd.pslinkb.max_requests='64'
+	uci commit uhttpd
+}
+
+/etc/init.d/uhttpd restart 2>/dev/null || true
+/etc/init.d/nginx restart 2>/dev/null || true
+exit 0

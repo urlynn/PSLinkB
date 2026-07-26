@@ -1,41 +1,122 @@
-/// 文件 IPC：/tmp/pslinkb/ 与 LuCI 通信
+/// ubus push + state.json fallback
 
 #[cfg(feature = "openwrt")]
 mod imp {
-    const TMP_DIR: &str = "/tmp/pslinkb";
+    use serde_json::{json, Value};
+
+    const STATE_FILE: &str = "/tmp/pslinkb/state.json";
+
+    pub trait IntoStateValue {
+        fn into_value(self) -> Value;
+    }
+
+    impl IntoStateValue for &str {
+        fn into_value(self) -> Value {
+            if self.starts_with('{') {
+                serde_json::from_str(self).unwrap_or(Value::String(self.to_string()))
+            } else {
+                Value::String(self.to_string())
+            }
+        }
+    }
+
+    impl IntoStateValue for &String {
+        fn into_value(self) -> Value {
+            self.as_str().into_value()
+        }
+    }
+
+    impl IntoStateValue for bool {
+        fn into_value(self) -> Value {
+            Value::Bool(self)
+        }
+    }
+
+    fn default_value(key: &str) -> Value {
+        match key {
+            "running" => Value::Bool(false),
+            "qr"   => json!({ "url": "", "status": "" }),
+            "live" => json!({ "status": "" }),
+            "dns"  => json!({
+                "checking": false,
+                "enabled": false,
+                "target": "",
+                "actual": "",
+                "ok": false
+            }),
+            _ => Value::String(String::new()),
+        }
+    }
+
+    /// 初始空状态
+    fn empty_state() -> Value {
+        json!({
+            "running": true,
+            "user": "",
+            "qr": { "url": "", "status": "" },
+            "live": { "status": "" },
+            "error": "",
+            "dns": {
+                "checking": false,
+                "enabled": false,
+                "target": "",
+                "actual": "",
+                "ok": false
+            }
+        })
+    }
 
     pub fn init() {
-        let _ = std::fs::create_dir_all(TMP_DIR);
-        reset();
+        let _ = std::fs::create_dir_all("/tmp/pslinkb");
+        write_file(&empty_state());
     }
 
-    pub fn set(key: &str, value: &str) {
-        let tmp = format!("{}/.{}.tmp", TMP_DIR, key);
-        let dst = format!("{}/{}", TMP_DIR, key);
-        if std::fs::write(&tmp, value).is_ok() {
-            let _ = std::fs::rename(&tmp, &dst);
-        }
+    /// 设置一个顶层字段
+    pub fn set<T: IntoStateValue>(key: &str, value: T) {
+        let parsed = value.into_value();
+
+        push_event(key, &parsed);
+
+        let mut state = read_state();
+        state[key] = parsed;
+        write_file(&state);
     }
 
-    pub fn read(key: &str) -> Option<String> {
-        std::fs::read_to_string(format!("{}/{}", TMP_DIR, key)).ok()
-    }
-
+    /// 清空一个顶层字段
     pub fn clear(key: &str) {
-        let _ = std::fs::remove_file(format!("{}/{}", TMP_DIR, key));
+        let empty = default_value(key);
+        push_event(key, &empty);
+        let mut state = read_state();
+        state[key] = empty;
+        write_file(&state);
     }
 
-    /// LuCI 写入 "1" 触发扫码，rust 处理完后 clear
-    pub fn has_command(key: &str) -> bool {
-        if read(key).as_deref() == Some("1") { clear(key); true } else { false }
+    pub fn read_state() -> Value {
+        std::fs::read_to_string(STATE_FILE)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(empty_state)
     }
 
-    /// 关播清理
-    /// qr_status 不清 - 登录完成后 Rust 退出 respawn, 保留 done 让 LuCI 读到跳转
-    pub fn reset() {
-        for key in &["user", "rtmp", "stream", "qr_url", "error"] {
-            clear(key);
+    fn write_file(state: &Value) {
+        let tmp = format!("/tmp/pslinkb/.state.json.tmp");
+        if std::fs::write(&tmp, state.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, STATE_FILE);
         }
+    }
+
+    fn push_event(key: &str, value: &Value) {
+        let payload = json!({
+            "type": "pslinkb",
+            "data": {
+                "key": key,
+                "value": value
+            }
+        });
+        // ubus push
+        let _ = std::process::Command::new("ubus")
+            .args(["call", "service", "event", &payload.to_string()])
+            .spawn();
     }
 }
 
@@ -45,11 +126,9 @@ pub use imp::*;
 #[cfg(feature = "cli")]
 mod stub {
     pub fn init() {}
-    pub fn set(_key: &str, _value: &str) {}
-    pub fn read(_key: &str) -> Option<String> { None }
+    pub fn set<T>(_key: &str, _value: T) {}
     pub fn clear(_key: &str) {}
-    pub fn has_command(_key: &str) -> bool { false }
-    pub fn reset() {}
+    pub fn read_state() -> serde_json::Value { serde_json::Value::Null }
 }
 
 #[cfg(feature = "cli")]
