@@ -21,8 +21,7 @@ int ps_avio_open(AVFormatContext *ctx, const char *url) {
     return avio_open(&ctx->pb, url, AVIO_FLAG_WRITE);
 }
 
-// 中断回调: opaque 指向 streaming_flag 的字节. 1=推流中(继续) 0=停止(中止阻塞读)
-// 返回非 0 时 av_read_frame 等阻塞 I/O 立刻以 AVERROR_EXIT 返回 -> 主动停=干净停
+// 返回非 0 时 av_read_frame 等阻塞 I/O 立刻以 AVERROR_EXIT 返回
 static int ps_interrupt_cb(void *opaque) {
     return (*(volatile unsigned char *)opaque) ? 0 : 1;
 }

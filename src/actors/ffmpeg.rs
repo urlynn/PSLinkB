@@ -26,14 +26,16 @@ pub struct FfmpegActor {
     cmd_rx: mpsc::Receiver<FfmpegCommand>,
     event_tx: mpsc::Sender<Event>,
     streaming_flag: Arc<AtomicBool>,
+    ffmpeg_path: Option<String>,
 }
 
 impl FfmpegActor {
-    pub fn new(cmd_rx: mpsc::Receiver<FfmpegCommand>, event_tx: mpsc::Sender<Event>) -> Self {
+    pub fn new(cmd_rx: mpsc::Receiver<FfmpegCommand>, event_tx: mpsc::Sender<Event>, ffmpeg_path: Option<String>) -> Self {
         Self {
             cmd_rx,
             event_tx,
             streaming_flag: Arc::new(AtomicBool::new(false)),
+            ffmpeg_path,
         }
     }
 
@@ -49,27 +51,66 @@ impl FfmpegActor {
                     match cmd {
                         Some(FfmpegCommand::Start { ps5_app, ps5_stream_key, bilibili_rtmp_url, bilibili_stream_key }) => {
                             self.streaming_flag.store(true, Ordering::SeqCst);
-                            let flag = Arc::clone(&self.streaming_flag);
-                            let mut inner_shutdown = shutdown_rx.resubscribe();
-                            let et = self.event_tx.clone();
 
-                            tokio::task::spawn_blocking(move || {
-                                let input_url = crate::config::rtmp_url("127.0.0.1", &ps5_app, &ps5_stream_key);
-                                let output_url = format!("{}{}", bilibili_rtmp_url, bilibili_stream_key);
+                            let input_url = crate::config::rtmp_url("127.0.0.1", &ps5_app, &ps5_stream_key);
+                            let output_url = format!("{}{}", bilibili_rtmp_url, bilibili_stream_key);
 
-                                match Self::do_stream(
-                                    &input_url, &output_url, &flag, &mut inner_shutdown,
-                                ) {
-                                    Err(FfmpegExitStatus::Normal) => {
-                                        dlog!("[FFmpeg] Streaming completed");
+                            if let Some(ffmpeg_bin) = self.ffmpeg_path.clone() {
+                                let mut inner_shutdown = shutdown_rx.resubscribe();
+                                let et = self.event_tx.clone();
+                                tokio::spawn(async move {
+                                    match self::external::do_stream(Some(&ffmpeg_bin), &input_url, &output_url, &mut inner_shutdown).await {
+                                        Err(FfmpegExitStatus::Normal) => {
+                                            dlog!("[FFmpeg] Streaming completed");
+                                        }
+                                        Err(status) => {
+                                            log!(error, "FFmpeg: Streaming error");
+                                            let _ = et.try_send(Event::FfmpegError(status));
+                                        }
+                                        Ok(()) => unreachable!(),
                                     }
-                                    Err(status) => {
-                                        log!(error, "FFmpeg: Streaming error");
-                                        let _ = et.try_send(Event::FfmpegError(status));
-                                    }
-                                    Ok(()) => unreachable!(),
+                                });
+                            } else {
+                                #[cfg(feature = "ffi-ffmpeg")]
+                                {
+                                    let flag = Arc::clone(&self.streaming_flag);
+                                    let inner_shutdown = shutdown_rx.resubscribe();
+                                    let et = self.event_tx.clone();
+
+                                    tokio::task::spawn_blocking(move || {
+                                        let mut sd = inner_shutdown;
+                                        match self::ffi::do_stream(&input_url, &output_url, &flag, &mut sd) {
+                                            Err(FfmpegExitStatus::Normal) => {
+                                                dlog!("[FFmpeg] Streaming completed");
+                                            }
+                                            Err(status) => {
+                                                log!(error, "FFmpeg: Streaming error");
+                                                let _ = et.try_send(Event::FfmpegError(status));
+                                            }
+                                            Ok(()) => unreachable!(),
+                                        }
+                                    });
                                 }
-                            });
+
+                                #[cfg(not(feature = "ffi-ffmpeg"))]
+                                {
+                                    let mut inner_shutdown = shutdown_rx.resubscribe();
+                                    let et = self.event_tx.clone();
+
+                                    tokio::spawn(async move {
+                                        match self::external::do_stream(None, &input_url, &output_url, &mut inner_shutdown).await {
+                                            Err(FfmpegExitStatus::Normal) => {
+                                                dlog!("[FFmpeg] Streaming completed");
+                                            }
+                                            Err(status) => {
+                                                log!(error, "FFmpeg: Streaming error");
+                                                let _ = et.try_send(Event::FfmpegError(status));
+                                            }
+                                            Ok(()) => unreachable!(),
+                                        }
+                                    });
+                                }
+                            }
                         }
                         Some(FfmpegCommand::Stop) => {
                             self.streaming_flag.store(false, Ordering::SeqCst);
@@ -80,86 +121,6 @@ impl FfmpegActor {
             }
         }
         Ok(())
-    }
-
-    // ── 平台分发 ──
-
-    #[cfg(feature = "ffi-ffmpeg")]
-    fn do_stream(
-        input_url: &str,
-        output_url: &str,
-        flag: &Arc<AtomicBool>,
-        shutdown_rx: &mut broadcast::Receiver<()>,
-    ) -> Result<(), FfmpegExitStatus> {
-        match self::ffi::do_stream(input_url, output_url, flag, shutdown_rx) {
-            Ok(()) => Err(FfmpegExitStatus::Normal), // 正常完成（EOF）
-            Err(e) => Err(e),
-        }
-    }
-
-    #[cfg(not(feature = "ffi-ffmpeg"))]
-    fn do_stream(
-        input_url: &str,
-        output_url: &str,
-        flag: &Arc<AtomicBool>,
-        shutdown_rx: &mut broadcast::Receiver<()>,
-    ) -> Result<(), FfmpegExitStatus> {
-        self::external::do_stream(input_url, output_url, flag, shutdown_rx)
-    }
-}
-
-// ————————————————————————————————————————————————————————————
-//  子进程管理 — external-ffmpeg / 系统 ffmpeg
-// ————————————————————————————————————————————————————————————
-
-#[cfg(not(feature = "ffi-ffmpeg"))]
-fn run_process(
-    mut child: std::process::Child,
-    label: &str,
-    flag: &Arc<AtomicBool>,
-    shutdown_rx: &mut broadcast::Receiver<()>,
-) -> Result<(), FfmpegExitStatus> {
-    loop {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if status.success() {
-                    return Err(FfmpegExitStatus::Normal);
-                }
-                let mut err = String::new();
-                if let Some(mut stderr) = child.stderr {
-                    let _ = std::io::Read::read_to_string(&mut stderr, &mut err);
-                }
-                if status.code().is_none() {
-                    return Err(FfmpegExitStatus::Error(FfmpegErrorKind::Crash(format!(
-                        "signal kill: {}",
-                        err.trim()
-                    ))));
-                }
-                return Err(FfmpegExitStatus::Error(FfmpegErrorKind::IoError(format!(
-                    "exited with {}: {}",
-                    status,
-                    err.trim()
-                ))));
-            }
-            Ok(None) => {}
-            Err(e) => {
-                return Err(FfmpegExitStatus::Error(FfmpegErrorKind::IoError(
-                    e.to_string(),
-                )));
-            }
-        }
-
-        if !flag.load(Ordering::SeqCst) {
-            eprintln!("[{}] Stopping worker...", label);
-            let _ = child.kill();
-            return Err(FfmpegExitStatus::Normal);
-        }
-        if shutdown_rx.try_recv().is_ok() {
-            let _ = child.kill();
-            return Err(FfmpegExitStatus::Normal);
-        }
     }
 }
 
@@ -282,13 +243,13 @@ mod ffi {
 }
 
 // ————————————————————————————————————————————————————————
-//  子进程模式 — external-ffmpeg / 系统 ffmpeg
+//  子进程模式 — external-ffmpeg / 系统 ffmpeg 
 // ————————————————————————————————————————————————————————
 
-#[cfg(not(feature = "ffi-ffmpeg"))]
 mod external {
     use super::*;
-    use std::process::{Command, Stdio};
+    use tokio::io::AsyncBufReadExt;
+    use tokio::process::{Child, Command};
 
     #[cfg(feature = "external-ffmpeg")]
     fn find_stream_bin() -> String {
@@ -306,17 +267,19 @@ mod external {
         "pslinkb-stream".to_string()
     }
 
-    pub fn do_stream(
+    pub async fn do_stream(
+        ffmpeg_path: Option<&str>,
         input_url: &str,
         output_url: &str,
-        flag: &Arc<AtomicBool>,
         shutdown_rx: &mut broadcast::Receiver<()>,
     ) -> Result<(), FfmpegExitStatus> {
         #[cfg(feature = "external-ffmpeg")]
-        let bin = find_stream_bin();
+        let default_bin = find_stream_bin();
 
         #[cfg(not(feature = "external-ffmpeg"))]
-        let bin = "ffmpeg";
+        let default_bin = "ffmpeg".to_string();
+
+        let bin: String = ffmpeg_path.map(|p| p.to_string()).unwrap_or(default_bin);
 
         eprintln!("[FFmpeg] {} {} {}", bin, input_url, output_url);
 
@@ -326,14 +289,58 @@ mod external {
         #[cfg(not(feature = "external-ffmpeg"))]
         let args = ["-i", input_url, "-c", "copy", "-f", "flv", output_url];
 
-        let child = Command::new(&bin)
+        let mut child: Child = Command::new(&bin)
             .args(&args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| FfmpegExitStatus::Error(FfmpegErrorKind::IoError(e.to_string())))?;
 
-        super::run_process(child, "FFmpeg", flag, shutdown_rx)
+        // stderr 异步逐行实时读取
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                let reader = tokio::io::BufReader::new(stderr);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if !line.is_empty() {
+                        eprintln!("[FFmpeg] {}", line);
+                    }
+                }
+            });
+        }
+
+        // 进程退出
+        tokio::select! {
+            status = child.wait() => {
+                match status {
+                    Ok(s) if s.success() => {
+                        Err(FfmpegExitStatus::Normal)
+                    }
+                    Ok(s) => {
+                        if s.code().is_none() {
+                            Err(FfmpegExitStatus::Error(FfmpegErrorKind::Crash(
+                                format!("signal kill: {}", s),
+                            )))
+                        } else {
+                            Err(FfmpegExitStatus::Error(FfmpegErrorKind::IoError(
+                                format!("exited with {}", s),
+                            )))
+                        }
+                    }
+                    Err(e) => {
+                        Err(FfmpegExitStatus::Error(FfmpegErrorKind::IoError(
+                            e.to_string(),
+                        )))
+                    }
+                }
+            }
+            _ = shutdown_rx.recv() => {
+                eprintln!("[FFmpeg] Stopping worker...");
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                Err(FfmpegExitStatus::Normal)
+            }
+        }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "pslinkb"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 description = "PS5 to Bilibili Live Streaming Bridge"
 license = "MIT OR Apache-2.0"
@@ -15,7 +15,7 @@ path = "src/main.rs"
 blivemsg = "0.2.4"
 
 # 异步运行时
-tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "sync", "macros", "io-util", "time"] }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "sync", "macros", "io-util", "time", "process"] }
 futures-util = "0.3.32"
 
 # 序列化

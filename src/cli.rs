@@ -38,6 +38,10 @@ pub struct Args {
     #[arg(short = 'd', long)]
     pub dns: Option<String>,
 
+    /// 使用系统 FFmpeg (路径)
+    #[arg(long)]
+    pub ffmpeg: Option<String>,
+
     /// 开启调试日志输出
     #[arg(long)]
     pub debug: bool,

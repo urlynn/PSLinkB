@@ -1,13 +1,20 @@
-// FFmpeg FFI — 仅在非 external-ffmpeg 模式下编译。
-// 外部模式用子进程 pslinkb-stream，不链接任何 FFmpeg 库。
+// FFmpeg FFI + 外部模式子进程 
 
-#![allow(non_camel_case_types, dead_code, unused_imports)]
+#![allow(non_camel_case_types)]
 
 use std::ffi::{CStr, CString, c_void};
 use std::os::raw::{c_char, c_int, c_uint};
 use std::ptr;
 
 use crate::core::error::AppError;
+
+pub fn codec_name(id: i32) -> &'static str {
+    match id {
+        27 => "AVC",    
+        86018 => "AAC", 
+        _ => "?",
+    }
+}
 
 // ── 始终可见 ──
 
@@ -26,14 +33,6 @@ pub enum AVMediaType {
 mod ext_stubs {
     use super::*;
 
-    pub fn codec_name(id: i32) -> &'static str {
-        match id {
-            27 => "AVC", 28 => "HEVC", 12 => "MPEG2",
-            86018 => "AAC", 86017 => "MP3", 86056 => "OPUS",
-            _ => "?",
-        }
-    }
-
     pub fn codec_id(_cp: *const c_void) -> i32 { 0 }
 
     pub fn codec_type(_cp: *const c_void) -> AVMediaType { AVMediaType::AVMEDIA_TYPE_VIDEO }
@@ -50,8 +49,6 @@ pub use ext_stubs::*;
 
 #[cfg(feature = "ffi-ffmpeg")]
 mod ffi_impl {
-    use super::*;
-
     pub use super::*;
 
     mod ffi_types {
@@ -77,7 +74,6 @@ mod ffi_impl {
         fn av_packet_free(pkt: *mut *mut AVPacket);
         fn av_packet_unref(pkt: *mut AVPacket);
         fn av_read_frame(ctx: *mut AVFormatContext, pkt: *mut AVPacket) -> c_int;
-        fn av_write_frame(ctx: *mut AVFormatContext, pkt: *mut AVPacket) -> c_int;
         fn av_interleaved_write_frame(ctx: *mut AVFormatContext, pkt: *mut AVPacket) -> c_int;
         fn avcodec_parameters_copy(dst: *mut AVCodecParameters, src: *const AVCodecParameters) -> c_int;
         fn av_strerror(errnum: c_int, errbuf: *mut u8, errbuf_size: usize) -> c_int;
@@ -222,13 +218,6 @@ mod ffi_impl {
         }
     }
 
-    pub fn codec_name(id: i32) -> &'static str {
-        match id {
-            27 => "AVC", 28 => "HEVC", 12 => "MPEG2",
-            86018 => "AAC", 86017 => "MP3", 86056 => "OPUS",
-            _ => "?",
-        }
-    }
 }
 
 #[cfg(feature = "ffi-ffmpeg")]

@@ -58,7 +58,7 @@ pub fn spawn_irc_server(
 // 按需 Workers
 // ————————————————————————————————————————————————————————————
 
-pub fn spawn_ffmpeg_worker(mut cmd_rx: mpsc::Receiver<crate::system::FfmpegCmd>, event_tx: mpsc::Sender<Event>) {
+pub fn spawn_ffmpeg_worker(mut cmd_rx: mpsc::Receiver<crate::system::FfmpegCmd>, event_tx: mpsc::Sender<Event>, ffmpeg_path: Option<String>) {
     tokio::spawn(async move {
         let mut actor_tx: Option<mpsc::Sender<crate::actors::ffmpeg::FfmpegCommand>> = None;
         let mut sd_tx: Option<tokio::sync::broadcast::Sender<()>> = None;
@@ -72,7 +72,7 @@ pub fn spawn_ffmpeg_worker(mut cmd_rx: mpsc::Receiver<crate::system::FfmpegCmd>,
                     bilibili_stream_key,
                 } => {
                     let (tx, rx) = mpsc::channel(8);
-                    let actor = crate::actors::ffmpeg::FfmpegActor::new(rx, event_tx.clone());
+                    let actor = crate::actors::ffmpeg::FfmpegActor::new(rx, event_tx.clone(), ffmpeg_path.clone());
                     let (sdt, sdr) = tokio::sync::broadcast::channel(1);
 
                     tokio::spawn(async move {
