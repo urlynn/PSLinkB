@@ -1,0 +1,254 @@
+name: Build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Target platform'
+        type: choice
+        required: false
+        options: [all, linux-x86_64, linux-x86_64-gracemont, linux-aarch64, windows-x86_64, macos-aarch64, macos-x86_64]
+        default: 'all'
+      deps-tag:
+        description: 'Release tag with pslinkb-deps-*.tar.gz'
+        type: string
+        required: false
+        default: 'build-deps'
+  workflow_call:
+    inputs:
+      platform:
+        type: string
+        required: false
+        default: 'all'
+      deps-tag:
+        type: string
+        required: false
+        default: 'build-deps'
+
+permissions:
+  contents: write
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+
+jobs:
+  build-linux-x86_64:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux-x86_64' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-unknown-linux-musl
+      - run: sudo apt-get install -y musl-tools
+      - name: Build openwrt
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin pslinkb --features openwrt,channel-mpsc,external-ffmpeg && cp target/x86_64-unknown-linux-musl/release/pslinkb /tmp/pslinkb-x86_64-openwrt
+      - name: Build bundle
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin pslinkb --features cli,channel-mpsc,external-ffmpeg,dns-redirect && cp target/x86_64-unknown-linux-musl/release/pslinkb /tmp/pslinkb-x86_64-bundle
+      - name: Download FFmpeg deps for ffi (portable)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release download ${{ inputs.deps-tag || 'build-deps' }} --repo ${{ github.repository }} \
+            -p 'pslinkb-deps-linux-x86_64.tar.gz' -D /tmp/ --clobber
+          mkdir -p /tmp/deps
+          tar xzf /tmp/pslinkb-deps-linux-x86_64.tar.gz -C /tmp/deps/
+          rm -rf ffbuild/linux-x86_64 && mkdir -p ffbuild/linux-x86_64
+          cp -a /tmp/deps/ffbuild/. ffbuild/linux-x86_64/
+          ls -la ffbuild/linux-x86_64/lib/libav*.a
+      - name: Build portable (ffi, self-contained)
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin pslinkb --features cli,channel-mpsc,ffi-ffmpeg,dns-redirect && cp target/x86_64-unknown-linux-musl/release/pslinkb /tmp/pslinkb-x86_64-portable
+      - name: Verify
+        run: |
+          /tmp/pslinkb-x86_64-openwrt --version
+          /tmp/pslinkb-x86_64-bundle --version
+          echo "linux-x86_64 OK"
+      - name: Upload to build-deps release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload build-deps /tmp/pslinkb-x86_64-* --repo ${{ github.repository }} --clobber
+
+  build-linux-x86_64-gracemont:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux-x86_64-gracemont' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-unknown-linux-musl
+      - run: sudo apt-get install -y musl-tools
+      - name: Build openwrt (gracemont)
+        env:
+          RUSTFLAGS: "-C target-cpu=gracemont"
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin pslinkb --features openwrt,channel-mpsc,external-ffmpeg && cp target/x86_64-unknown-linux-musl/release/pslinkb /tmp/pslinkb-x86_64-gracemont-openwrt
+      - name: Verify
+        run: |
+          /tmp/pslinkb-x86_64-gracemont-openwrt --version
+          echo "linux-x86_64-gracemont OK"
+      - name: Upload to build-deps release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload build-deps /tmp/pslinkb-x86_64-gracemont-* --repo ${{ github.repository }} --clobber
+
+  build-linux-aarch64:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux-aarch64' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add aarch64-unknown-linux-musl
+      - run: sudo apt-get install -y musl-tools
+      - name: Build openwrt
+        run: cargo build --release --target aarch64-unknown-linux-musl --bin pslinkb --features openwrt,channel-mpsc,external-ffmpeg && cp target/aarch64-unknown-linux-musl/release/pslinkb /tmp/pslinkb-aarch64-openwrt
+      - name: Build bundle
+        run: cargo build --release --target aarch64-unknown-linux-musl --bin pslinkb --features cli,channel-mpsc,external-ffmpeg,dns-redirect && cp target/aarch64-unknown-linux-musl/release/pslinkb /tmp/pslinkb-aarch64-bundle
+      - name: Download FFmpeg deps for ffi (portable)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release download ${{ inputs.deps-tag || 'build-deps' }} --repo ${{ github.repository }} \
+            -p 'pslinkb-deps-linux-aarch64.tar.gz' -D /tmp/ --clobber
+          mkdir -p /tmp/deps
+          tar xzf /tmp/pslinkb-deps-linux-aarch64.tar.gz -C /tmp/deps/
+          rm -rf ffbuild/linux-aarch64 && mkdir -p ffbuild/linux-aarch64
+          cp -a /tmp/deps/ffbuild/. ffbuild/linux-aarch64/
+          ls -la ffbuild/linux-aarch64/lib/libav*.a
+      - name: Build portable (ffi, self-contained)
+        run: cargo build --release --target aarch64-unknown-linux-musl --bin pslinkb --features cli,channel-mpsc,ffi-ffmpeg,dns-redirect && cp target/aarch64-unknown-linux-musl/release/pslinkb /tmp/pslinkb-aarch64-portable
+      - name: Verify
+        run: |
+          /tmp/pslinkb-aarch64-openwrt --version
+          /tmp/pslinkb-aarch64-bundle --version
+          echo "linux-aarch64 OK"
+      - name: Upload to build-deps release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload build-deps /tmp/pslinkb-aarch64-* --repo ${{ github.repository }} --clobber
+
+  build-windows-x86_64:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows-x86_64' }}
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-pc-windows-gnu
+      - name: Build
+        run: |
+          cargo build --release --target x86_64-pc-windows-gnu --features cli,channel-broadcast,external-ffmpeg,windivert
+          cp target/x86_64-pc-windows-gnu/release/pslinkb.exe pslinkb-x86_64-windows.exe
+      - name: Build pslinkb-windivert
+        run: |
+          cargo build --release --target x86_64-pc-windows-gnu --bin pslinkb-windivert --features cli,channel-broadcast,external-ffmpeg,windivert
+          cp target/x86_64-pc-windows-gnu/release/pslinkb-windivert.exe pslinkb-x86_64-windivert.exe
+      - name: Verify
+        run: |
+          ./pslinkb-x86_64-windows.exe --version
+          echo "windows-x86_64 OK"
+      - name: Verify pslinkb-windivert
+        shell: bash
+        run: |
+          set -e
+          curl -sSL -o /tmp/windivert.zip https://github.com/basil00/WinDivert/releases/download/v2.2.2/WinDivert-2.2.2-A.zip
+          7z x /tmp/windivert.zip -o/tmp/windivert-pkg -y
+          cp /tmp/windivert-pkg/WinDivert-2.2.2-A/x64/WinDivert.dll ./
+          ./pslinkb-x86_64-windivert.exe --version
+          echo "pslinkb-windivert --version + DLL load OK"
+      - name: Upload to build-deps release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload build-deps pslinkb-x86_64-windows.exe pslinkb-x86_64-windivert.exe --repo ${{ github.repository }} --clobber
+
+  build-macos-aarch64:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos-aarch64' }}
+    runs-on: macos-26
+    timeout-minutes: 10
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download FFmpeg deps from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release download ${{ inputs.deps-tag || 'build-deps' }} --repo ${{ github.repository }} \
+            -p 'pslinkb-deps-macos-aarch64.tar.gz' -D /tmp/ --clobber
+          mkdir -p /tmp/deps
+          tar xzf /tmp/pslinkb-deps-macos-aarch64.tar.gz -C /tmp/deps/
+          if [ -d /tmp/deps/ffbuild/lib ]; then
+            rm -rf ffbuild/macos-aarch64 && mkdir -p ffbuild/macos-aarch64
+            cp -a /tmp/deps/ffbuild/. ffbuild/macos-aarch64/
+            echo "=== FFmpeg deps ===" && ls -la ffbuild/macos-aarch64/lib/libav*.a
+          else
+            echo "ERROR: macOS aarch64 FFmpeg not found in deps"
+            exit 1
+          fi
+      - name: Build pslinkb (macOS aarch64)
+        run: |
+          cargo build --release --bin pslinkb --features "cli,channel-broadcast,ffi-ffmpeg,dns-redirect"
+          cp target/release/pslinkb /tmp/pslinkb-aarch64-macos
+      - name: Verify
+        run: |
+          /tmp/pslinkb-aarch64-macos --version
+          echo "macOS aarch64 OK"
+      - name: Upload to build-deps release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload build-deps /tmp/pslinkb-aarch64-macos --repo ${{ github.repository }} --clobber
+
+  build-macos-x86_64:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos-x86_64' }}
+    runs-on: macos-26-intel
+    timeout-minutes: 10
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download FFmpeg deps from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release download ${{ inputs.deps-tag || 'build-deps' }} --repo ${{ github.repository }} \
+            -p 'pslinkb-deps-macos-x86_64.tar.gz' -D /tmp/ --clobber
+          mkdir -p /tmp/deps
+          tar xzf /tmp/pslinkb-deps-macos-x86_64.tar.gz -C /tmp/deps/
+          if [ -d /tmp/deps/ffbuild/lib ]; then
+            rm -rf ffbuild/macos-x86_64 && mkdir -p ffbuild/macos-x86_64
+            cp -a /tmp/deps/ffbuild/. ffbuild/macos-x86_64/
+            echo "=== FFmpeg deps ===" && ls -la ffbuild/macos-x86_64/lib/libav*.a
+          else
+            echo "ERROR: macOS x86_64 FFmpeg not found in deps"
+            exit 1
+          fi
+      - name: Build pslinkb (macOS x86_64)
+        run: |
+          cargo build --release --bin pslinkb --features "cli,channel-broadcast,ffi-ffmpeg,dns-redirect"
+          cp target/release/pslinkb /tmp/pslinkb-x86_64-macos
+      - name: Verify
+        run: |
+          /tmp/pslinkb-x86_64-macos --version
+          echo "macOS x86_64 OK"
+      - name: Upload to build-deps release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload build-deps /tmp/pslinkb-x86_64-macos --repo ${{ github.repository }} --clobber
+
+  call-release:
+    needs: [build-linux-x86_64, build-linux-x86_64-gracemont, build-linux-aarch64, build-windows-x86_64, build-macos-aarch64, build-macos-x86_64]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ github.ref_name }}
+      deps-tag: 'build-deps'
