@@ -26,7 +26,7 @@ pub struct Args {
     #[arg(short = 't', long)]
     pub title: Option<String>,
 
-    /// 直播分区 ID（默认 "237" - 单机游戏 - 主机游戏）
+    /// 直播分区 ID（默认 单机游戏 - 主机游戏）
     #[arg(short = 'a', long)]
     pub area: Option<String>,
 
@@ -41,6 +41,11 @@ pub struct Args {
     /// 使用系统 FFmpeg (路径)
     #[arg(long)]
     pub ffmpeg: Option<String>,
+
+    /// HTTP 代理 (格式 http://host:port)
+    #[cfg(windows)]
+    #[arg(long)]
+    pub proxy: Option<String>,
 
     /// 开启调试日志输出
     #[arg(long)]

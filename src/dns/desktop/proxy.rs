@@ -1,10 +1,10 @@
-//! DNS 代理 — 重定向指定域名返回本机 IP，其余透传到上游 DNS。
+//! DNS 代理
 
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use tokio::net::UdpSocket;
-
-use crate::dlog;
+#[cfg(windows)]
+use tokio::sync::watch;
 
 use hickory_proto::op::{Message, MessageType, OpCode, ResponseCode};
 use hickory_proto::rr::{RData, Record, RecordType};
@@ -16,6 +16,8 @@ pub struct DnsProxy {
     redirect_domains: HashSet<String>,
     target_ip: Ipv4Addr,
     upstream: SocketAddr,
+    #[cfg(windows)]
+    ps5_tx: Option<watch::Sender<Option<Ipv4Addr>>>,
 }
 
 fn detect_upstream() -> SocketAddr {
@@ -51,16 +53,50 @@ fn detect_upstream() -> SocketAddr {
 }
 
 impl DnsProxy {
+    async fn bind(
+        domains: &[&str],
+        upstream: Option<SocketAddr>,
+    ) -> Result<(UdpSocket, HashSet<String>, SocketAddr), std::io::Error> {
+        #[cfg(windows)]
+        let bind_addr = "0.0.0.0:0";
+        #[cfg(not(windows))]
+        let bind_addr = "0.0.0.0:53";
+        let socket = UdpSocket::bind(bind_addr).await?;
+        let redirect_domains: HashSet<String> = domains.iter().map(|d| d.to_string()).collect();
+        let upstream = upstream.unwrap_or_else(detect_upstream);
+        Ok((socket, redirect_domains, upstream))
+    }
+
     pub async fn new(
         domains: &[&str],
         target_ip: Ipv4Addr,
         upstream: Option<SocketAddr>,
     ) -> Result<Self, std::io::Error> {
-        let socket = UdpSocket::bind("0.0.0.0:53").await?;
-        let redirect_domains: HashSet<String> = domains.iter().map(|d| d.to_string()).collect();
-        let upstream = upstream.unwrap_or_else(detect_upstream);
-        dlog!("DNS: 上游 {}", upstream);
-        Ok(Self { socket, redirect_domains, target_ip, upstream })
+        let (socket, redirect_domains, upstream) = Self::bind(domains, upstream).await?;
+        Ok(Self {
+            socket,
+            redirect_domains,
+            target_ip,
+            upstream,
+            #[cfg(windows)]
+            ps5_tx: None,
+        })
+    }
+
+    #[cfg(windows)]
+    pub async fn with_ps5(
+        domains: &[&str],
+        target_ip: Ipv4Addr,
+        upstream: Option<SocketAddr>,
+        ps5_tx: Option<watch::Sender<Option<Ipv4Addr>>>,
+    ) -> Result<Self, std::io::Error> {
+        let (socket, redirect_domains, upstream) = Self::bind(domains, upstream).await?;
+        Ok(Self { socket, redirect_domains, target_ip, upstream, ps5_tx })
+    }
+
+    #[cfg(windows)]
+    pub fn listen_port(&self) -> u16 {
+        self.socket.local_addr().unwrap().port()
     }
 
     pub async fn serve(self) -> Result<(), std::io::Error> {
@@ -81,11 +117,21 @@ impl DnsProxy {
             let name = name.trim_end_matches('.');
             let qtype = query.query_type();
 
+            #[cfg(windows)]
+            if let Some(tx) = &self.ps5_tx {
+                if name == "playstation.net" || name.ends_with(".playstation.net")
+                    || name == "playstation.com" || name.ends_with(".playstation.com")
+                {
+                    if let std::net::IpAddr::V4(v4) = src.ip() {
+                        let _ = tx.send(Some(v4));
+                    }
+                }
+            }
+
             let should_redirect = self.redirect_domains.iter()
                 .any(|d| name == d || name.ends_with(&format!(".{}", d)));
 
             if should_redirect && qtype == RecordType::A {
-                dlog!("[DNS] {} -> {} ({:?}) REDIRECT -> {}", src.ip(), name, qtype, self.target_ip);
                 let mut response = Message::new(request.id, MessageType::Response, OpCode::Query);
                 response.queries.push(query.clone());
                 response.metadata.authoritative = true;
@@ -97,8 +143,25 @@ impl DnsProxy {
                 if let Ok(resp_bytes) = response.to_bytes() {
                     let _ = self.socket.send_to(&resp_bytes, src).await;
                 }
+
+                #[cfg(all(windows, feature = "windivert"))]
+                {
+                    use std::net::IpAddr;
+                    if let IpAddr::V4(client_v4) = src.ip() {
+                        if name == "irc.twitch.tv" {
+                            crate::dns::windows::windivert::pipe_send(format!(
+                                "\x1b[32m[WinDivert] IRC - {} -> irc.twitch.tv ✓ REDIRECT -> {}:6667\x1b[0m",
+                                client_v4, self.target_ip
+                            ));
+                        } else if name == "ingest.global-contribute.live-video.net" {
+                            crate::dns::windows::windivert::pipe_send(format!(
+                                "\x1b[32m[WinDivert] RTMP - {} -> ingest.global-contribute.live-video.net ✓ REDIRECT -> {}:1935\x1b[0m",
+                                client_v4, self.target_ip
+                            ));
+                        }
+                    }
+                }
             } else {
-                dlog!("[DNS] {} -> {} ({:?}) FORWARD -> {}", src.ip(), name, qtype, self.upstream);
                 let upstream_sock = match std::net::UdpSocket::bind("0.0.0.0:0") {
                     Ok(s) => {
                         s.set_read_timeout(Some(std::time::Duration::from_secs(3))).ok();

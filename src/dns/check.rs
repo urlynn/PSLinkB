@@ -10,7 +10,7 @@ mod dns_redirect_imports {
 
 #[cfg(feature = "dns-redirect")]
 use std::time::Duration;
-#[cfg(feature = "dns-redirect")]
+#[cfg(all(feature = "dns-redirect", not(windows)))]
 use owo_colors::{OwoColorize, Stream};
 
 pub const REDIRECT_DOMAINS: &[&str] = &[
@@ -21,12 +21,16 @@ pub const REDIRECT_DOMAINS: &[&str] = &[
     "tmi.twitch.tv",
 ];
 
+/// HTTP 代理加速域名
+pub const PROXY_DOMAINS: &[&str] = &[
+    "api.twitch.tv",
+    "ingest.twitch.tv",
+];
+
 pub const CHECK_DOMAINS: &[&str] = &[
     "irc.twitch.tv",
     "ingest.global-contribute.live-video.net",
 ];
-
-const DNS_STATUS_PATH: &str = "/tmp/pslinkb/dns_status";
 
 #[derive(serde::Serialize)]
 struct DnsStatus {
@@ -46,7 +50,7 @@ pub fn write_dns_status(checking: bool, enabled: bool, target: &str, actual: &st
         ok,
     };
     if let Ok(json) = serde_json::to_string(&status) {
-        let _ = std::fs::write(DNS_STATUS_PATH, json);
+        crate::luci::set("dns", &json);
     }
 }
 
@@ -140,14 +144,20 @@ where
         let ip = resolve_fn(domain.to_string()).await.unwrap_or_else(|| "无解析".into());
 
         if ip == expected_ip {
-            let ip_colored = ip.if_supports_color(Stream::Stderr, |s| s.green());
-            let check = "✓".if_supports_color(Stream::Stderr, |s| s.green());
-            eprintln!("[System] DNS Check - {} -> {} {}", domain, ip_colored, check);
+            #[cfg(not(windows))]
+            {
+                let ip_colored = ip.if_supports_color(Stream::Stderr, |s| s.green());
+                let check = "✓".if_supports_color(Stream::Stderr, |s| s.green());
+                eprintln!("[System] DNS Check - {} -> {} {}", domain, ip_colored, check);
+            }
             results.push(CheckResult { domain: domain.to_string(), expected: expected_ip.to_string(), actual: Some(ip), success: true });
         } else {
-            let ip_colored = ip.if_supports_color(Stream::Stderr, |s| s.red());
-            let cross = "✗".if_supports_color(Stream::Stderr, |s| s.red());
-            eprintln!("[System] DNS Check - {} -> {} {}", domain, ip_colored, cross);
+            #[cfg(not(windows))]
+            {
+                let ip_colored = ip.if_supports_color(Stream::Stderr, |s| s.red());
+                let cross = "✗".if_supports_color(Stream::Stderr, |s| s.red());
+                eprintln!("[System] DNS Check - {} -> {} {}", domain, ip_colored, cross);
+            }
             results.push(CheckResult { domain: domain.to_string(), expected: expected_ip.to_string(), actual: Some(ip), success: false });
         }
     }

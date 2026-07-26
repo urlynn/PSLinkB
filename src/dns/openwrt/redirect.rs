@@ -27,10 +27,10 @@ pub async fn init(domains: &[&str], target_ip: &str, config: &crate::config::Con
 #[cfg(feature = "openwrt")]
 pub async fn handle_sighup(local_ip: &str) {
     eprintln!("[INFO] SIGHUP received - Toggling DNS...");
-    let enabled = std::fs::read_to_string("/tmp/pslinkb/dns_status")
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get("enabled")?.as_bool())
+    let enabled = crate::luci::read_state()
+        .get("dns")
+        .and_then(|d| d.get("enabled"))
+        .and_then(|e| e.as_bool())
         .map(|b| !b)
         .unwrap_or(true);
 

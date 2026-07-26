@@ -104,10 +104,14 @@ async fn run() -> Result<(), AppError> {
             #[cfg(feature = "cli")]
             args.dns.as_deref(),
         );
+        #[cfg(all(feature = "cli", windows))]
+        let proxy_url = config.proxy.as_deref();
         deferred = pslinkb::dns::auto_start(
             config.dns_proxy,
             &local_ip,
             dns_override,
+            #[cfg(all(feature = "cli", windows))]
+            proxy_url,
         ).await;
     }
 
@@ -131,6 +135,8 @@ async fn run() -> Result<(), AppError> {
         args.title.clone(),
         args.area.clone(),
         args.mode.as_ref().and_then(|s| s.parse().ok()),
+        #[cfg(windows)]
+        args.proxy.clone(),
         args.ffmpeg.clone(),
     );
 
@@ -236,7 +242,7 @@ async fn run() -> Result<(), AppError> {
     #[cfg(feature = "openwrt")]
     log!(ok, "{}", pslinkb::INIT_COMPLETE_MSG);
 
-
+    // ── Windows ──
     #[cfg(all(feature = "cli", windows))]
     {
         log!(alert, "[WARN] 请将 PS5 的首选 DNS 设为本机 IP: {} - 备用 DNS 为 0.0.0.0", local_ip);
@@ -250,6 +256,8 @@ async fn run() -> Result<(), AppError> {
     #[cfg(not(unix))]
     let result = run_loop(system, event_rx, ch, &local_ip, config).await;
 
+    #[cfg(all(windows, feature = "dns-redirect"))]
+    pslinkb::dns::windows::windivert::shutdown();
 
     result
 }
@@ -286,6 +294,8 @@ fn load_config(args: &pslinkb::cli::Args) -> Result<(Config, std::path::PathBuf,
         args.title.clone(),
         args.area.clone(),
         args.mode.as_ref().and_then(|s| s.parse().ok()),
+        #[cfg(windows)]
+        args.proxy.clone(),
         args.ffmpeg.clone(),
     );
 
