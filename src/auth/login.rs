@@ -3,19 +3,64 @@
 use crate::config::CookieEntry;
 use crate::core::error::AppError;
 use crate::core::biliapi;
+use reqwest::cookie::{CookieStore, Jar};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 // —— Cookie 提取 ——
 
-fn extract_cookies(url: &str) -> Vec<CookieEntry> {
-    let query = url.split('?').nth(1).unwrap_or("");
-    query.split('&').filter_map(|pair| {
-        let (k, v) = pair.split_once('=')?;
-        if matches!(k, "SESSDATA" | "bili_jct" | "buvid3" | "DedeUserID" | "DedeUserID__ckMd5") {
-            Some(CookieEntry { name: k.into(), value: v.into() })
-        } else { None }
+fn is_auth_cookie(name: &str) -> bool {
+    matches!(name, "SESSDATA" | "bili_jct" | "buvid3" | "DedeUserID" | "DedeUserID__ckMd5")
+}
+
+fn extract_url_cookies(url: &reqwest::Url) -> Vec<CookieEntry> {
+    url.query_pairs().filter_map(|(name, value)| {
+        is_auth_cookie(&name).then(|| CookieEntry {
+            name: name.into_owned(), value: value.into_owned(),
+        })
     }).collect()
+}
+
+fn extract_cookie_header(header: &str) -> Vec<CookieEntry> {
+    header.split(';').filter_map(|pair| {
+        let (name, value) = pair.trim().split_once('=')?;
+        is_auth_cookie(name).then(|| CookieEntry { name: name.into(), value: value.into() })
+    }).collect()
+}
+
+fn merge_cookies(cookies: &mut Vec<CookieEntry>, incoming: impl IntoIterator<Item = CookieEntry>) {
+    for cookie in incoming {
+        if let Some(existing) = cookies.iter_mut().find(|item| item.name == cookie.name) {
+            existing.value = cookie.value;
+        } else {
+            cookies.push(cookie);
+        }
+    }
+}
+
+fn has_login_cookies(cookies: &[CookieEntry]) -> bool {
+    ["SESSDATA", "bili_jct"].iter()
+        .all(|name| cookies.iter().any(|cookie| cookie.name == *name))
+}
+
+fn is_trusted_bilibili_url(url: &reqwest::Url) -> bool {
+    url.scheme() == "https" && url.host_str().is_some_and(|host| {
+        matches!(host, "bilibili.com" | "biligame.com")
+            || host.ends_with(".bilibili.com")
+            || host.ends_with(".biligame.com")
+    })
+}
+
+fn extract_jar_cookies(jar: &Jar, urls: &[&reqwest::Url]) -> Vec<CookieEntry> {
+    let mut cookies = Vec::new();
+    let www_url = reqwest::Url::parse("https://www.bilibili.com/").expect("valid Bilibili URL");
+    for url in urls.iter().copied().chain([&www_url]) {
+        if let Some(header) = jar.cookies(url).and_then(|value| value.to_str().ok().map(str::to_owned)) {
+            merge_cookies(&mut cookies, extract_cookie_header(&header));
+        }
+    }
+    cookies
 }
 
 // —— 共用：获取 QR + 轮询扫码 ——
@@ -27,7 +72,17 @@ async fn poll_qr(
     mut on_scanned: impl FnMut(),
     mut on_progress: impl FnMut(u32),
 ) -> Result<Vec<CookieEntry>, AppError> {
-    let client = reqwest::Client::new();
+    let jar = Arc::new(Jar::default());
+    let client = reqwest::Client::builder()
+        .cookie_provider(Arc::clone(&jar))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() < 10 && is_trusted_bilibili_url(attempt.url()) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .build()?;
 
     let (qr_url, key) = biliapi::generate_qr(&client).await?;
     show_qr(&qr_url);
@@ -49,13 +104,121 @@ async fn poll_qr(
 
         match status {
             QrStatus::Confirmed(url) => {
-                let cookies = extract_cookies(&url);
-                return if cookies.is_empty() { Err("Failed to extract cookies".into()) }
+                let redirect_url = reqwest::Url::parse(&url)
+                    .map_err(|_| AppError::from("Invalid QR login redirect URL"))?;
+                if !is_trusted_bilibili_url(&redirect_url) {
+                    return Err("Refusing untrusted QR login redirect URL".into());
+                }
+
+                let mut cookies = extract_url_cookies(&redirect_url);
+                match client.get(redirect_url.clone()).send().await {
+                    Ok(response) => {
+                        let final_url = response.url().clone();
+                        merge_cookies(
+                            &mut cookies,
+                            extract_jar_cookies(&jar, &[&redirect_url, &final_url]),
+                        );
+                    }
+                    Err(_) if has_login_cookies(&cookies) => return Ok(cookies),
+                    Err(e) => return Err(e.into()),
+                }
+                return if !has_login_cookies(&cookies) { Err("Failed to extract login cookies".into()) }
                        else { Ok(cookies) };
             }
             QrStatus::Expired => return Err("二维码已过期".into()),
             QrStatus::Scanned => on_scanned(),
             QrStatus::Waiting => on_progress(attempts),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_legacy_cookies_from_redirect_url() {
+        let url = reqwest::Url::parse(
+            "https://passport.bilibili.com/login?SESSDATA=session%3Dvalue&bili_jct=csrf&ignored=value",
+        ).unwrap();
+
+        assert_eq!(extract_url_cookies(&url), vec![
+            CookieEntry { name: "SESSDATA".into(), value: "session=value".into() },
+            CookieEntry { name: "bili_jct".into(), value: "csrf".into() },
+        ]);
+    }
+
+    #[test]
+    fn extracts_only_auth_cookies_from_cookie_header() {
+        assert_eq!(
+            extract_cookie_header("SESSDATA=session==; ignored=value; bili_jct=csrf"),
+            vec![
+                CookieEntry { name: "SESSDATA".into(), value: "session==".into() },
+                CookieEntry { name: "bili_jct".into(), value: "csrf".into() },
+            ],
+        );
+    }
+
+    #[test]
+    fn reads_auth_cookies_from_jar() {
+        let jar = Jar::default();
+        let url = reqwest::Url::parse("https://passport.bilibili.com/").unwrap();
+        jar.add_cookie_str("SESSDATA=session; Domain=.bilibili.com; Path=/", &url);
+        jar.add_cookie_str("bili_jct=csrf; Domain=.bilibili.com; Path=/", &url);
+        jar.add_cookie_str("ignored=value; Domain=.bilibili.com; Path=/", &url);
+
+        let cookies = extract_jar_cookies(&jar, &[&url]);
+        assert_eq!(cookies.len(), 2);
+        assert!(cookies.contains(&CookieEntry { name: "SESSDATA".into(), value: "session".into() }));
+        assert!(cookies.contains(&CookieEntry { name: "bili_jct".into(), value: "csrf".into() }));
+    }
+
+    #[test]
+    fn merge_replaces_duplicate_cookie_values() {
+        let mut cookies = vec![
+            CookieEntry { name: "SESSDATA".into(), value: "legacy".into() },
+        ];
+
+        merge_cookies(&mut cookies, vec![
+            CookieEntry { name: "SESSDATA".into(), value: "redirect".into() },
+            CookieEntry { name: "bili_jct".into(), value: "csrf".into() },
+        ]);
+
+        assert_eq!(cookies, vec![
+            CookieEntry { name: "SESSDATA".into(), value: "redirect".into() },
+            CookieEntry { name: "bili_jct".into(), value: "csrf".into() },
+        ]);
+    }
+
+    #[test]
+    fn requires_session_and_csrf_cookies() {
+        let mut cookies = vec![
+            CookieEntry { name: "SESSDATA".into(), value: "session".into() },
+            CookieEntry { name: "buvid3".into(), value: "visitor".into() },
+        ];
+        assert!(!has_login_cookies(&cookies));
+
+        cookies.push(CookieEntry { name: "bili_jct".into(), value: "csrf".into() });
+        assert!(has_login_cookies(&cookies));
+    }
+
+    #[test]
+    fn trusts_only_https_bilibili_hosts() {
+        for url in [
+            "https://bilibili.com/",
+            "https://passport.bilibili.com/",
+            "https://passport.biligame.com/",
+        ] {
+            assert!(is_trusted_bilibili_url(&reqwest::Url::parse(url).unwrap()));
+        }
+        for url in [
+            "http://passport.bilibili.com/",
+            "https://bilibili.com.evil.example/",
+            "https://biligame.com.evil.example/",
+            "https://evil-bilibili.com/",
+            "https://example.com/",
+        ] {
+            assert!(!is_trusted_bilibili_url(&reqwest::Url::parse(url).unwrap()));
         }
     }
 }
