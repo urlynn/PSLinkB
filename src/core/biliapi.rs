@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
+use reqwest::cookie::Jar;
+use std::sync::Arc;
 use crate::log;
 use crate::core::error::AppError;
 use crate::core::error::bili_common_error;
@@ -566,4 +568,12 @@ pub async fn poll_qr_status(client: &reqwest::Client, key: &str) -> Result<ScanS
         return Err(AppError::bili_api("QrLogin", resp.code as i64, msg));
     }
     resp.data.ok_or_else(|| AppError::bili_api("QrLogin", 0, ""))
+}
+
+pub(crate) fn qr_login_client() -> Result<(reqwest::Client, Arc<Jar>), AppError> {
+    let jar = Arc::new(Jar::default());
+    let client = reqwest::Client::builder()
+        .cookie_provider(Arc::clone(&jar))
+        .build()?;
+    Ok((client, jar))
 }
