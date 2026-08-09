@@ -190,7 +190,7 @@ fn port_redirect_loop(
         match unsafe { wd_recv(handle, &mut buf) } {
             Ok((len, addr)) => {
                 let packet = &mut buf[..len];
-                if last_seen.elapsed() > std::time::Duration::from_secs(60) {
+                if last_seen.elapsed() > std::time::Duration::from_secs(5) {
                     *learned_shared.lock().unwrap() = None;
                 }
                 last_seen = std::time::Instant::now();
@@ -260,7 +260,7 @@ fn learned_1935() -> Arc<Mutex<Option<Ipv4Addr>>> {
 
 /// 启动 1935 端口重定向
 pub fn start_1935_intercept(local_ip: Ipv4Addr) -> Result<(), String> {
-    let filter = "tcp and (tcp.DstPort == 1935 or tcp.SrcPort == 1935)";
+    let filter = "tcp and ip.SrcAddr != 127.0.0.1 and ip.DstAddr != 127.0.0.1 and (tcp.DstPort == 1935 or tcp.SrcPort == 1935)";
     let handle = unsafe { wd_open(filter)? };
     let map = Arc::new(Mutex::new(HashMap::<u16, Ipv4Addr>::new()));
 
@@ -298,7 +298,7 @@ fn learned_6667() -> Arc<Mutex<Option<Ipv4Addr>>> {
 
 /// 启动 6667 端口重定向
 pub fn start_6667_intercept(local_ip: Ipv4Addr) -> Result<(), String> {
-    let filter = "tcp and (tcp.DstPort == 6667 or tcp.SrcPort == 6667)";
+    let filter = "tcp and ip.SrcAddr != 127.0.0.1 and ip.DstAddr != 127.0.0.1 and (tcp.DstPort == 6667 or tcp.SrcPort == 6667)";
     let handle = unsafe { wd_open(filter)? };
     let map = Arc::new(Mutex::new(HashMap::<u16, Ipv4Addr>::new()));
 

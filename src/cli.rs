@@ -111,7 +111,7 @@ pub fn select_mode() -> Option<String> {
         eprintln!("    2. DNS 劫持模式         内置 DNS 代理 - 需要 PS5 的 DNS 指向本机");
         eprintln!("    3. HTTP 代理模式        PS5 无需设置代理 - 仅需将 DNS 指向本机");
         #[cfg(windows)]
-        eprintln!("    4. 加速器兼容模式       仅在使用加速器的情况下选择此项");
+        eprintln!("    4. 加速器兼容模式       仅在使用 PC 端加速器的情况下选择此项");
         #[cfg(windows)]
         eprint!("  输入 1-4: ");
         #[cfg(unix)]

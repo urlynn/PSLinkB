@@ -79,7 +79,7 @@ impl IrcClientWorker {
                                 if let Some(irc_msg) = Self::format_message(&danmu_msg, &channel_name)
                                     && writer.write_all(irc_msg.as_bytes()).await.is_err()
                                 {
-                                    eprintln!("[IRC:Cli] Write failed - PS5 disconnected");
+                                    eprintln!("[IRC:Cli] Write failed - IRC connection lost");
                                     break;
                                 }
                             }

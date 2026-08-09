@@ -7,6 +7,7 @@ use crate::core::channel::{DanmuMessage, DanmuSender};
 use crate::core::event::Event;
 use crate::core::error::AppError;
 use crate::log;
+use crate::dlog;
 
 pub struct DanmuWorker {
     room_id: u64,
@@ -29,7 +30,7 @@ impl DanmuWorker {
         loop {
             match self.connect_and_stream().await {
                 Ok(()) => {
-                    log!(warn, "Danmaku: Stream ended, reconnecting...");
+                    log!(info, "Danmaku: WebSocket closed, reconnecting...");
                 }
                 Err(e) => {
                     log!(warn, "Danmaku: Connect failed: {}, reconnecting...", e);
@@ -54,7 +55,7 @@ impl DanmuWorker {
             }
         }
 
-        eprintln!("[Danmaku] Stream ended");
+        dlog!("[Danmaku] WebSocket closed");
         Ok(())
     }
 }
