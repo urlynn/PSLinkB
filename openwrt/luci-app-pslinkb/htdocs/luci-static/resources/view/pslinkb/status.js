@@ -46,6 +46,11 @@ var callSvcStatus = rpc.declare({
 	method: 'svc_status'
 });
 
+var callSvcConfirm = rpc.declare({
+	object: 'luci.pslinkb',
+	method: 'svc_confirm'
+});
+
 var callDnsToggle = rpc.declare({
 	object: 'luci.pslinkb',
 	method: 'dns_toggle',
@@ -519,8 +524,23 @@ return view.extend({
 			self._restarting = Date.now();
 			self._enterRestarting();
 			callSvcRestart().catch(function(){});
+			self._confirmSvcAfter(5000);
 		});
 		return btn;
+	},
+
+	_confirmSvcAfter: function(ms) {
+		var self = this;
+		setTimeout(function() {
+			callSvcConfirm().then(function(r) {
+				if (!r) return;
+				self._svcManual = null;
+				var d = window._pslinkbData || {};
+				var state = d.state || {};
+				state.running = r.running;
+				self._updateSvc(state, d.mode || 'auto');
+			}).catch(function() {});
+		}, ms || 5000);
 	},
 
 	_enterRestarting: function() {
@@ -551,6 +571,7 @@ return view.extend({
 			(on ? callSvcStart : callSvcStop)().then(function() {
 			//SSE running 到达时由 _applyPush 清空
 			inp.disabled = false;
+			self._confirmSvcAfter(on ? 5000 : 0);
 		}).catch(function() {
 			inp.disabled = false;
 		});

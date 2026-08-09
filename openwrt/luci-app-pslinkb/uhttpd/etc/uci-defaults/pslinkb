@@ -12,6 +12,21 @@ uci -q get uhttpd.main.ubus_prefix >/dev/null 2>&1 || {
 	changed=1
 }
 
+[ "$(uci -q get uhttpd.main.network_timeout)" = "30" ] || {
+	uci set uhttpd.main.network_timeout='30'
+	changed=1
+}
+
+[ "$(uci -q get uhttpd.main.tcp_keepalive)" = "1" ] || {
+	uci set uhttpd.main.tcp_keepalive='1'
+	changed=1
+}
+
+[ "$(uci -q get uhttpd.main.http_keepalive)" = "20" ] || {
+	uci set uhttpd.main.http_keepalive='20'
+	changed=1
+}
+
 [ "$changed" = "1" ] && {
 	uci commit uhttpd
 	/etc/init.d/uhttpd restart 2>/dev/null || true

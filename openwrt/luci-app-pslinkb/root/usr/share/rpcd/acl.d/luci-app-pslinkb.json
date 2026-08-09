@@ -11,7 +11,7 @@
 		"write": {
 			"uci": [ "pslinkb" ],
 			"ubus": {
-				"luci.pslinkb": [ "log_clear", "svc_start", "svc_stop", "svc_restart", "config_reload", "dns_toggle", "install_package" ]
+				"luci.pslinkb": [ "log_clear", "svc_start", "svc_stop", "svc_restart", "svc_confirm", "config_reload", "dns_toggle", "install_package" ]
 			}
 		}
 	}
