@@ -34,13 +34,20 @@ pub async fn dispatch(
         Effect::BilibiliStartLive {
             room_id,
             area_v2,
-            title,
         } => {
             let _ = bilibili_tx
                 .send(crate::system::BilibiliCmd::StartLive {
                     room_id,
                     area_v2,
+                })
+                .await;
+        }
+        Effect::UpdateRoom { room_id, title } => {
+            let _ = bilibili_tx
+                .send(crate::system::BilibiliCmd::UpdateRoom {
+                    room_id,
                     title,
+                    area: None,
                 })
                 .await;
         }

@@ -36,8 +36,16 @@ impl IrcServerActor {
         let writers: Arc<Mutex<Vec<tokio::net::tcp::OwnedWriteHalf>>> =
             Arc::new(Mutex::new(Vec::new()));
 
+        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        ping_interval.tick().await;
+
         loop {
             tokio::select! {
+                // PING PONG
+                _ = ping_interval.tick() => {
+                    broadcast_message(&writers, b"PING :tmi.twitch.tv\r\n").await;
+                }
+
                 // 新 TCP 连接
                 accept_result = listener.accept() => {
                     let (stream, socket_addr) = accept_result?;
@@ -52,12 +60,16 @@ impl IrcServerActor {
                     let is_ps5_conn = is_ps5;
                     let client_addr_clone = client_addr.clone();
 
-                    {
+                    let write_keep = if is_ps5 {
                         let mut writers_guard = writers.lock().await;
                         writers_guard.push(write_half);
-                    }
+                        None
+                    } else {
+                        Some(write_half)
+                    };
 
                     tokio::spawn(async move {
+                        let _write_keep = write_keep;
                         handle_irc_client(
                             read_half,
                             writers_clone,
@@ -80,9 +92,7 @@ impl IrcServerActor {
                             );
                             broadcast_message(&writers, irc_msg.as_bytes()).await;
                         }
-                        None => {
-                            eprintln!("[IRC:Srv] Notify channel closed");
-                        }
+                        None => return Ok(()),
                     }
                 }
             }
@@ -191,8 +201,12 @@ async fn broadcast_message(
     let mut to_remove = Vec::new();
     
     for (i, writer) in writers_guard.iter_mut().enumerate() {
-        if writer.write_all(data).await.is_err() {
-            to_remove.push(i);
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            writer.write_all(data),
+        ).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) | Err(_) => to_remove.push(i),
         }
     }
     

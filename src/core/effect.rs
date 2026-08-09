@@ -17,6 +17,9 @@ pub enum Effect {
     BilibiliStartLive {
         room_id: u64,
         area_v2: String,
+    },
+    UpdateRoom {
+        room_id: u64,
         title: Option<String>,
     },
     /// 调用 B站 stopLive

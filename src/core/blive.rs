@@ -32,13 +32,13 @@ pub enum StartOutcome {
 }
 
 /// startLive - 按结果分类返回
-pub async fn try_start_live(cookie: &str, csrf: &str, room_id: u64, area_v2: &str, title: Option<&str>) -> StartOutcome {
+pub async fn try_start_live(cookie: &str, csrf: &str, room_id: u64, area_v2: &str) -> StartOutcome {
     let client = reqwest::Client::new();
     let uid = get_uid(cookie);
 
     // electron 优先
     let mut chosen = LiveClient::Electron;
-    let mut result = biliapi::start_live_electron(&client, cookie, csrf, uid.as_deref(), room_id, area_v2, title).await;
+    let mut result = biliapi::start_live_electron(&client, cookie, csrf, uid.as_deref(), room_id, area_v2).await;
 
     match &result {
         Err(e) => {
@@ -50,7 +50,7 @@ pub async fn try_start_live(cookie: &str, csrf: &str, room_id: u64, area_v2: &st
         Ok(StartLiveResult::Failed { code, message, .. }) => {
             log!(warn, "Bili:Live: {} - Electron 失败 - Fallback Livehime", AppError::bili_api("StartLive", *code as i64, message.clone()));
             chosen = LiveClient::Livehime;
-            result = biliapi::start_live_livehime(&client, cookie, csrf, uid.as_deref(), room_id, area_v2, title).await;
+            result = biliapi::start_live_livehime(&client, cookie, csrf, uid.as_deref(), room_id, area_v2).await;
         }
     }
 

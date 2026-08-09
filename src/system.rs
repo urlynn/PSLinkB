@@ -57,7 +57,6 @@ pub enum BilibiliCmd {
     StartLive {
         room_id: u64,
         area_v2: String,
-        title: Option<String>,
     },
     StopLive {
         room_id: u64,
@@ -146,7 +145,6 @@ impl System {
                     effects.push(Effect::BilibiliStartLive {
                         room_id: self.config.live.room_id,
                         area_v2: self.config.live.area_v2.clone(),
-                        title: self.title_param(),
                     });
                 } else {
                     self.state = State::Ps5Streaming;
@@ -212,9 +210,13 @@ impl System {
                     },
                 ];
 
-                // config.title 为空时用 Twitch 标题同步
-                if self.config.live.title.is_empty()
-                    && let Some(bid) = crate::core::twitch::parse_broadcaster_id(stream_key)
+                // 标题同步
+                if !self.config.live.title.is_empty() {
+                    effects.push(Effect::UpdateRoom {
+                        room_id: self.config.live.room_id,
+                        title: Some(self.config.live.title.clone()),
+                    });
+                } else if let Some(bid) = crate::core::twitch::parse_broadcaster_id(stream_key)
                 {
                     effects.push(Effect::SyncTwitchTitle {
                         room_id: self.config.live.room_id,
@@ -275,7 +277,6 @@ impl System {
                 vec![Effect::BilibiliStartLive {
                     room_id: self.config.live.room_id,
                     area_v2: self.config.live.area_v2.clone(),
-                    title: self.title_param(),
                 }]
             }
             // ————————————————————————————————————————————
@@ -403,15 +404,6 @@ impl System {
             }
             // 无效转换 — 静默忽略
             _ => Vec::new(),
-        }
-    }
-
-    /// 辅助：生成开播 title 参数
-    fn title_param(&self) -> Option<String> {
-        if self.config.live.title.is_empty() {
-            None
-        } else {
-            Some(self.config.live.title.clone())
         }
     }
 

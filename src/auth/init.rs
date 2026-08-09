@@ -7,7 +7,30 @@ use crate::core::biliapi::{self, UserInfo};
 use crate::core::error::AppError;
 use crate::log;
 
-/// 有效 cookie 返回 (cookie_string, csrf)，无效 exec 重启
+enum CookieCheck {
+    Ready(String, String),
+    Expired,
+    Failed(AppError),
+}
+
+async fn check_cookie(
+    cookie: &str,
+    csrf: &str,
+    config_path: &Path,
+    config: &Config,
+) -> CookieCheck {
+    match verify_cookie_str(cookie).await {
+        Ok(Some(info)) => {
+            if config.live.room_id == 0 {
+                discover_and_save_room(config_path, info.uid).await;
+            }
+            CookieCheck::Ready(cookie.to_string(), csrf.to_string())
+        }
+        Ok(None) => CookieCheck::Expired,
+        Err(e) => CookieCheck::Failed(e),
+    }
+}
+
 pub async fn ensure_cookie(
     config_path: &Path,
     config: &Config,
@@ -16,16 +39,19 @@ pub async fn ensure_cookie(
 
     if !cookie.is_empty() {
         let csrf = config.auth.csrf();
-        match verify_cookie_str(&cookie).await {
-            Ok(Some(info)) => {
-                if config.live.room_id == 0 {
-                    discover_and_save_room(config_path, info.uid).await;
+        match check_cookie(&cookie, &csrf, config_path, config).await {
+            CookieCheck::Ready(c, s) => return Ok((c, s)),
+            CookieCheck::Expired => log!(warn, "Cookie 已过期"),
+            CookieCheck::Failed(e) => {
+                if matches!(e, AppError::General(_)) {
+                    log!(warn, "网络错误 - 重试 Cookie 验证");
+                    if let CookieCheck::Ready(c, s) =
+                        check_cookie(&cookie, &csrf, config_path, config).await
+                    {
+                        return Ok((c, s));
+                    }
                 }
-                return Ok((cookie, csrf));
-            }
-            Ok(None) => eprintln!("[WARN] Cookie 已过期"),
-            Err(_) => {
-                eprintln!("[WARN] Cookie 验证失败 - 网络波动?");
+                log!(warn, "Cookie 验证失败 - {e}");
                 return Ok((cookie, csrf));
             }
         }

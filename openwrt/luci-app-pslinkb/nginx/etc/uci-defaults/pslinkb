@@ -7,6 +7,9 @@ uci -q get uhttpd.pslinkb >/dev/null 2>&1 || {
 	uci set uhttpd.pslinkb.no_ubusauth='1'
 	uci set uhttpd.pslinkb.home='/www'
 	uci set uhttpd.pslinkb.max_requests='64'
+	uci set uhttpd.pslinkb.network_timeout='30'
+	uci set uhttpd.pslinkb.tcp_keepalive='1'
+	uci set uhttpd.pslinkb.http_keepalive='20'
 	uci commit uhttpd
 }
 

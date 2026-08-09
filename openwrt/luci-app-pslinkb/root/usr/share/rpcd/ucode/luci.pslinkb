@@ -1,6 +1,17 @@
 'use strict';
 
 import { open, popen } from 'fs';
+import * as ubus from 'ubus';
+
+let _ubus = null;
+function push_event(key, value) {
+	try {
+		if (!_ubus) _ubus = ubus.connect();
+		_ubus.call('service', 'event', { type: 'pslinkb', data: { key: key, value: value } });
+	} catch (e) {
+		_ubus = null;
+	}
+}
 
 // ── URLs ─────────────────────────────────────
 
@@ -170,10 +181,14 @@ const methods = {
 	status_initial: {
 		call: function() {
 			const fd = open('/tmp/pslinkb/state.json', 'r');
-			if (!fd) return {};
-			const text = fd.read('all') || '{}';
-			fd.close();
-			return json(text);
+			let state = {};
+			if (fd) { const text = fd.read('all') || '{}'; fd.close(); state = json(text); }
+			const pf = popen('pidof pslinkb 2>/dev/null');
+			const pid = pf ? trim(pf.read('all') || '') : '';
+			if (pf) pf.close();
+			if (length(pid)) state.running = true;
+			else state = { running: false };
+			return state;
 		}
 	},
 
@@ -183,6 +198,22 @@ const methods = {
 	svc_stop:   { call: function() { let fd = popen('/etc/init.d/pslinkb stop 2>&1'); if (fd) { let _ = fd.read('all'); fd.close(); } return { ok: true, state: read_state() }; } },
 	svc_restart:{ call: function() { let fd = popen('/etc/init.d/pslinkb restart 2>&1'); if (fd) { let _ = fd.read('all'); fd.close(); } return { ok: true, state: read_state() }; } },
 	svc_status: { call: function() { let fd = popen('pidof pslinkb 2>/dev/null'); let pid = fd ? trim(fd.read('all') || '') : ''; if (fd) fd.close(); return { running: !!length(pid) }; } },
+	svc_confirm: {
+		call: function() {
+			const pf = popen('pidof pslinkb 2>/dev/null');
+			const pid = pf ? trim(pf.read('all') || '') : '';
+			if (pf) pf.close();
+			const running = length(pid) > 0;
+			const fd = open('/tmp/pslinkb/state.json', 'r');
+			let state = {};
+			if (fd) { const text = fd.read('all') || '{}'; fd.close(); state = json(text); }
+			state.running = running;
+			const wfd = open('/tmp/pslinkb/.state.json.tmp.confirm', 'w');
+			if (wfd) { wfd.write(sprintf('%J', state)); wfd.close(); popen('mv -f /tmp/pslinkb/.state.json.tmp.confirm /tmp/pslinkb/state.json'); }
+			push_event('running', running);
+			return { ok: true, running: running };
+		}
+	},
 	config_reload:{ call: function() { popen('kill -USR1 $(pidof pslinkb) 2>/dev/null'); return { ok: true }; } },
 
 	dns_toggle: {

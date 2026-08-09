@@ -21,6 +21,9 @@ pub mod desktop;
 #[cfg(feature = "dns-redirect")]
 pub use desktop::{proxy::DnsProxy, setup::auto_start};
 
+#[cfg(feature = "dns-redirect")]
+pub mod relay;
+
 #[cfg(all(feature = "dns-redirect", windows))]
 pub mod windows;
 
