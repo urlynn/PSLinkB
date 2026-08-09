@@ -80,9 +80,7 @@ impl IrcServerActor {
                             );
                             broadcast_message(&writers, irc_msg.as_bytes()).await;
                         }
-                        None => {
-                            eprintln!("[IRC:Srv] Notify channel closed");
-                        }
+                        None => return Ok(()),
                     }
                 }
             }

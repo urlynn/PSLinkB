@@ -135,9 +135,8 @@ pub fn spawn_bililive_cmds(
                     crate::system::BilibiliCmd::StartLive {
                         room_id,
                         area_v2,
-                        title,
                     } => {
-                        execute_start_live(room_id, area_v2, title, cookie_c, csrf_c, event_tx_c).await;
+                        execute_start_live(room_id, area_v2, cookie_c, csrf_c, event_tx_c).await;
                     }
                     crate::system::BilibiliCmd::StopLive { room_id, client } => {
                         execute_stop_live(room_id, client, cookie_c, csrf_c, event_tx_c).await;
@@ -203,14 +202,13 @@ async fn face_watcher(
 pub async fn execute_start_live(
     room_id: u64,
     area_v2: String,
-    title: Option<String>,
     cookie: String,
     csrf: String,
     event_tx: mpsc::Sender<Event>,
 ) {
     use crate::core::blive::{self, StartOutcome};
 
-    match blive::try_start_live(&cookie, &csrf, room_id, &area_v2, title.as_deref()).await {
+    match blive::try_start_live(&cookie, &csrf, room_id, &area_v2).await {
         StartOutcome::Started { rtmp_url, stream_key, client } => {
             let _ = event_tx.send(Event::BilibiliLiveStarted { rtmp_url, stream_key, client }).await;
             // 启动流状态监听

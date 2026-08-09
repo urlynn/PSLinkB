@@ -3,10 +3,11 @@
 #![cfg(windows)]
 
 use libloading::{Library, Symbol};
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::net::Ipv4Addr;
 use std::os::raw::{c_char, c_int, c_void};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use tokio::sync::mpsc;
 
@@ -62,15 +63,13 @@ type FnChecksums = unsafe extern "C" fn(*mut u8, u32, *const WindivertAddr, u64)
 #[repr(C)]
 struct WindivertAddr {
     timestamp: i64,
-    flags: u32,
-    reserved2: u32,
+    flags: u64,
     data: [u8; 64],
 }
 
 impl WindivertAddr {
-    /// bit 17 = Outbound
-    fn outbound(&self) -> bool {
-        (self.flags >> 17) & 1 == 1
+    fn new() -> Self {
+        Self { timestamp: 0, flags: 0, data: [0; 64] }
     }
 }
 
@@ -104,7 +103,7 @@ unsafe fn wd_open(filter: &str) -> Result<*mut c_void, String> {
 
 unsafe fn wd_recv(handle: *mut c_void, buf: &mut [u8]) -> Result<(usize, WindivertAddr), String> {
     let func: Symbol<FnRecv> = unsafe { dll().get(b"WinDivertRecv\0") }.map_err(|e| e.to_string())?;
-    let mut addr = WindivertAddr { timestamp: 0, flags: 0, reserved2: 0, data: [0; 64] };
+    let mut addr = WindivertAddr::new();
     let mut recv_len: u32 = 0;
     let ok = unsafe { func(handle, buf.as_mut_ptr(), buf.len() as u32, &mut recv_len, &mut addr) };
     if ok == 0 {
@@ -138,182 +137,195 @@ unsafe fn wd_checksums(packet: &mut [u8], addr: &WindivertAddr) {
     unsafe { func(packet.as_mut_ptr(), packet.len() as u32, addr, 0) };
 }
 
-// ── DNS 53 ──
-fn rewrite_udp_dst_port(packet: &mut [u8], new_port: u16) -> bool {
-    if packet.len() < 28 {
-        return false;
-    }
-    let ihl = (packet[0] & 0x0F) as usize * 4;
-    if packet.len() < ihl + 8 || packet[9] != 17 {
-        return false;
-    }
-    packet[ihl + 2] = (new_port >> 8) as u8;
-    packet[ihl + 3] = (new_port & 0xFF) as u8;
+// ── 1935/6667 端口重定向 ──
+
+fn read_ipv4_src(packet: &[u8]) -> Option<Ipv4Addr> {
+    if packet.len() < 20 { return None; }
+    Some(Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]))
+}
+
+fn read_ipv4_dst(packet: &[u8]) -> Option<Ipv4Addr> {
+    if packet.len() < 20 { return None; }
+    Some(Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]))
+}
+
+fn rewrite_ipv4_src(packet: &mut [u8], new_ip: Ipv4Addr) -> bool {
+    if packet.len() < 20 { return false; }
+    let bytes = new_ip.octets();
+    packet[12..16].copy_from_slice(&bytes);
     true
 }
 
-/// 修改 UDP SrcPort
-fn rewrite_udp_src_port(packet: &mut [u8], new_port: u16) -> bool {
-    if packet.len() < 28 {
-        return false;
-    }
-    let ihl = (packet[0] & 0x0F) as usize * 4;
-    if packet.len() < ihl + 8 || packet[9] != 17 {
-        return false;
-    }
-    packet[ihl] = (new_port >> 8) as u8;
-    packet[ihl + 1] = (new_port & 0xFF) as u8;
+fn rewrite_ipv4_dst(packet: &mut [u8], new_ip: Ipv4Addr) -> bool {
+    if packet.len() < 20 { return false; }
+    let bytes = new_ip.octets();
+    packet[16..20].copy_from_slice(&bytes);
     true
 }
 
-// ── 443 引流 ──
-fn rewrite_tcp_dst_port(packet: &mut [u8], new_port: u16) -> bool {
-    if packet.len() < 40 {
-        return false;
-    }
+fn read_tcp_src_port(packet: &[u8]) -> Option<u16> {
+    if packet.is_empty() { return None; }
     let ihl = (packet[0] & 0x0F) as usize * 4;
-    if packet.len() < ihl + 4 || packet[9] != 6 {
-        return false;
-    }
-    packet[ihl + 2] = (new_port >> 8) as u8;
-    packet[ihl + 3] = (new_port & 0xFF) as u8;
-    true
+    if packet.len() < ihl + 4 { return None; }
+    Some(u16::from_be_bytes([packet[ihl], packet[ihl + 1]]))
 }
 
-/// 修改 TCP SrcPort
-fn rewrite_tcp_src_port(packet: &mut [u8], new_port: u16) -> bool {
-    if packet.len() < 40 {
-        return false;
-    }
+fn read_tcp_dst_port(packet: &[u8]) -> Option<u16> {
+    if packet.is_empty() { return None; }
     let ihl = (packet[0] & 0x0F) as usize * 4;
-    if packet.len() < ihl + 4 || packet[9] != 6 {
-        return false;
-    }
-    packet[ihl] = (new_port >> 8) as u8;
-    packet[ihl + 1] = (new_port & 0xFF) as u8;
-    true
+    if packet.len() < ihl + 4 { return None; }
+    Some(u16::from_be_bytes([packet[ihl + 2], packet[ihl + 3]]))
 }
 
-// ── DNS 53 拦截 ──
+fn port_redirect_loop(
+    handle: *mut c_void,
+    local_ip: Ipv4Addr,
+    port: u16,
+    map: Arc<Mutex<HashMap<u16, Ipv4Addr>>>,
+    learned_shared: Arc<Mutex<Option<Ipv4Addr>>>,
+) {
+    let mut buf = [0u8; 65535];
+    let mut last_seen = std::time::Instant::now();
+    loop {
+        match unsafe { wd_recv(handle, &mut buf) } {
+            Ok((len, addr)) => {
+                let packet = &mut buf[..len];
+                if last_seen.elapsed() > std::time::Duration::from_secs(60) {
+                    *learned_shared.lock().unwrap() = None;
+                }
+                last_seen = std::time::Instant::now();
 
-static HANDLE_53: OnceLock<usize> = OnceLock::new();
-static THREAD_53: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+                let src_port = read_tcp_src_port(packet);
+                let dst_port = read_tcp_dst_port(packet);
+                let src_ip = read_ipv4_src(packet);
+                let dst_ip = read_ipv4_dst(packet);
 
-/// 启动 DNS 53 拦截
-pub fn start_intercept(dns_port: u16) -> Result<(), String> {
-    let filter = format!(
-        "(inbound and ip and udp.DstPort == 53) or (outbound and ip and udp.SrcPort == {})",
-        dns_port
-    );
-    let handle = unsafe { wd_open(&filter)? };
-    HANDLE_53.set(handle as usize).ok();
+                if let (Some(dp), Some(dip)) = (dst_port, dst_ip) {
+                    if dp == port {
+                        let mut learned = learned_shared.lock().unwrap();
+                        match *learned {
+                            None => {
+                                *learned = Some(dip);
+                                if let Some(sp) = src_port {
+                                    map.lock().unwrap().insert(sp, dip);
+                                }
+                                if rewrite_ipv4_dst(packet, local_ip) {
+                                    unsafe { wd_checksums(packet, &addr) };
+                                }
+                            }
+                            Some(l) if l == dip => {
+                                if let Some(sp) = src_port {
+                                    map.lock().unwrap().insert(sp, dip);
+                                }
+                                if rewrite_ipv4_dst(packet, local_ip) {
+                                    unsafe { wd_checksums(packet, &addr) };
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if let (Some(sp), Some(sip)) = (src_port, src_ip) {
+                    if sp == port && sip == local_ip {
+                        if let Some(dp) = dst_port {
+                            let orig_ip = map.lock().unwrap().get(&dp).copied();
+                            if let Some(ip) = orig_ip {
+                                if rewrite_ipv4_src(packet, ip) {
+                                    unsafe { wd_checksums(packet, &addr) };
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Err(e) = unsafe { wd_send(handle, packet, &addr) } {
+                    log_err(&format!("[ERROR] WinDivert helper error: {}", e));
+                }
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+// ── 1935 端口重定向 ──
+
+static HANDLE_1935: Mutex<Option<usize>> = Mutex::new(None);
+static THREAD_1935: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+static LEARNED_1935: OnceLock<Arc<Mutex<Option<Ipv4Addr>>>> = OnceLock::new();
+
+fn learned_1935() -> Arc<Mutex<Option<Ipv4Addr>>> {
+    LEARNED_1935.get_or_init(|| Arc::new(Mutex::new(None))).clone()
+}
+
+/// 启动 1935 端口重定向
+pub fn start_1935_intercept(local_ip: Ipv4Addr) -> Result<(), String> {
+    let filter = "tcp and (tcp.DstPort == 1935 or tcp.SrcPort == 1935)";
+    let handle = unsafe { wd_open(filter)? };
+    let map = Arc::new(Mutex::new(HashMap::<u16, Ipv4Addr>::new()));
+
+    *HANDLE_1935.lock().unwrap() = Some(handle as usize);
 
     let handle_usize = handle as usize;
     let th = thread::spawn(move || {
         let handle = handle_usize as *mut c_void;
-        let mut buf = [0u8; 65535];
-        loop {
-            match unsafe { wd_recv(handle, &mut buf) } {
-                Ok((len, addr)) => {
-                    let packet = &mut buf[..len];
-                    if addr.outbound() {
-                        if rewrite_udp_src_port(packet, 53) {
-                            unsafe { wd_checksums(packet, &addr) };
-                        }
-                    } else {
-                        if rewrite_udp_dst_port(packet, dns_port) {
-                            unsafe { wd_checksums(packet, &addr) };
-                        }
-                    }
-                    if let Err(e) = unsafe { wd_send(handle, packet, &addr) } {
-                        log_err(&format!("[ERROR] WinDivert helper error: {}", e));
-                    }
-                }
-                Err(_) => break,
-            }
-        }
+        port_redirect_loop(handle, local_ip, 1935, map, learned_1935());
     });
-    *THREAD_53.lock().unwrap() = Some(th);
-
+    *THREAD_1935.lock().unwrap() = Some(th);
     Ok(())
 }
 
-/// 卸载 53 过滤器
-pub fn shutdown_intercept() {
-    let handle = HANDLE_53.get().copied().unwrap_or(0) as *mut c_void;
-    if handle.is_null() {
-        return;
-    }
-    unsafe { wd_shutdown(handle) };
-    drop(THREAD_53.lock().unwrap().take());
-    unsafe { wd_close(handle) };
-}
-
-// ── 443 引流拦截 ──
-
-static HANDLE_443: Mutex<Option<usize>> = Mutex::new(None);
-static THREAD_443: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
-
-/// 启动 443 引流拦截
-pub fn start_443_intercept(ps5_ip: Ipv4Addr, relay_port: u16) -> Result<(), String> {
-    let filter = format!(
-        "(inbound and ip and ip.SrcAddr == {} and tcp.DstPort == 443) or (outbound and ip and ip.DstAddr == {} and tcp.SrcPort == {})",
-        ps5_ip, ps5_ip, relay_port
-    );
-    let handle = unsafe { wd_open(&filter)? };
-
-    let mut h = HANDLE_443.lock().unwrap();
-    if h.is_some() {
-        return Err("443 拦截已在运行".into());
-    }
-    *h = Some(handle as usize);
-
-    let handle_usize = handle as usize;
-    let th = thread::spawn(move || {
-        let handle = handle_usize as *mut c_void;
-        let mut buf = [0u8; 65535];
-        loop {
-            match unsafe { wd_recv(handle, &mut buf) } {
-                Ok((len, addr)) => {
-                    let packet = &mut buf[..len];
-                    if addr.outbound() {
-                        if rewrite_tcp_src_port(packet, 443) {
-                            unsafe { wd_checksums(packet, &addr) };
-                        }
-                    } else {
-                        if rewrite_tcp_dst_port(packet, relay_port) {
-                            unsafe { wd_checksums(packet, &addr) };
-                        }
-                    }
-                    if let Err(e) = unsafe { wd_send(handle, packet, &addr) } {
-                        log_err(&format!("[ERROR] WinDivert helper error: {}", e));
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
-    *THREAD_443.lock().unwrap() = Some(th);
-
-    Ok(())
-}
-
-/// 卸载 443 过滤器
-pub fn shutdown_443_intercept() {
-    let handle_opt = HANDLE_443.lock().unwrap().take();
+/// 卸载 1935 过滤器
+pub fn shutdown_1935_intercept() {
+    let handle_opt = HANDLE_1935.lock().unwrap().take();
     if let Some(handle_usize) = handle_opt {
         let handle = handle_usize as *mut c_void;
         unsafe { wd_shutdown(handle) };
-        drop(THREAD_443.lock().unwrap().take());
+        drop(THREAD_1935.lock().unwrap().take());
+        unsafe { wd_close(handle) };
+    }
+}
+
+// ── 6667 端口重定向 ──
+
+static HANDLE_6667: Mutex<Option<usize>> = Mutex::new(None);
+static THREAD_6667: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+static LEARNED_6667: OnceLock<Arc<Mutex<Option<Ipv4Addr>>>> = OnceLock::new();
+
+fn learned_6667() -> Arc<Mutex<Option<Ipv4Addr>>> {
+    LEARNED_6667.get_or_init(|| Arc::new(Mutex::new(None))).clone()
+}
+
+/// 启动 6667 端口重定向
+pub fn start_6667_intercept(local_ip: Ipv4Addr) -> Result<(), String> {
+    let filter = "tcp and (tcp.DstPort == 6667 or tcp.SrcPort == 6667)";
+    let handle = unsafe { wd_open(filter)? };
+    let map = Arc::new(Mutex::new(HashMap::<u16, Ipv4Addr>::new()));
+
+    *HANDLE_6667.lock().unwrap() = Some(handle as usize);
+
+    let handle_usize = handle as usize;
+    let th = thread::spawn(move || {
+        let handle = handle_usize as *mut c_void;
+        port_redirect_loop(handle, local_ip, 6667, map, learned_6667());
+    });
+    *THREAD_6667.lock().unwrap() = Some(th);
+    Ok(())
+}
+
+/// 卸载 6667 过滤器
+pub fn shutdown_6667_intercept() {
+    let handle_opt = HANDLE_6667.lock().unwrap().take();
+    if let Some(handle_usize) = handle_opt {
+        let handle = handle_usize as *mut c_void;
+        unsafe { wd_shutdown(handle) };
+        drop(THREAD_6667.lock().unwrap().take());
         unsafe { wd_close(handle) };
     }
 }
 
 // ── 主程序侧 ──
-pub fn start(
-    proxy_url: Option<&str>,
-    upstream: Option<&str>,
-) -> Result<(), String> {
+pub fn start(local_ip: Ipv4Addr) -> Result<(), String> {
     let exe = std::env::current_exe()
         .map_err(|e| e.to_string())?
         .parent()
@@ -324,14 +336,8 @@ pub fn start(
     }
 
     let exe_str = exe.to_str().ok_or("Exe path is not valid UTF-8")?;
-    let proxy_url_str = proxy_url.unwrap_or("none");
-    let upstream_str = upstream.unwrap_or("none");
-    let params = format!(
-        "{} {}",
-        proxy_url_str, upstream_str
-    );
     eprintln!("[INFO] 正在启动 pslinkb-windivert.exe - 请在 UAC 弹窗同意管理员请求");
-    shell_execute_runas(exe_str, &params)?;
+    shell_execute_runas(exe_str, &local_ip.to_string())?;
 
     Ok(())
 }

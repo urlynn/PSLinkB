@@ -14,17 +14,13 @@ pub struct Config {
     #[serde(default)]
     pub auth: AuthConfig,
 
-    #[cfg(feature = "dns-redirect")]
-    #[serde(default = "default_true")]
-    pub dns_proxy: bool,
-
     #[cfg(feature = "openwrt")]
     #[serde(default = "default_true")]
     pub dns_redirect: bool,
 
-    #[cfg(all(feature = "cli", windows))]
+    #[cfg(feature = "cli")]
     #[serde(default)]
-    pub proxy: Option<String>,
+    pub args: Option<String>,
 
     #[cfg(feature = "cli")]
     #[serde(default)]
@@ -85,12 +81,10 @@ impl Default for Config {
         Self {
             live: LiveConfig::default(),
             auth: AuthConfig::default(),
-            #[cfg(feature = "dns-redirect")]
-            dns_proxy: true,
             #[cfg(feature = "openwrt")]
             dns_redirect: true,
-            #[cfg(all(feature = "cli", windows))]
-            proxy: None,
+            #[cfg(feature = "cli")]
+            args: None,
             #[cfg(feature = "cli")]
             ffmpeg: None,
         }
@@ -174,8 +168,6 @@ impl Config {
         title: Option<String>,
         area: Option<String>,
         mode: Option<crate::core::blive::LiveMode>,
-        #[cfg(windows)]
-        proxy: Option<String>,
         ffmpeg: Option<String>,
     ) {
         if let Some(id) = room_id {
@@ -189,10 +181,6 @@ impl Config {
         }
         if let Some(m) = mode {
             self.live.live_mode = m;
-        }
-        #[cfg(windows)]
-        if let Some(p) = proxy {
-            self.proxy = Some(p);
         }
         if let Some(f) = ffmpeg {
             self.ffmpeg = Some(f);
@@ -210,6 +198,13 @@ impl Config {
     pub fn save_area_v2(path: &std::path::Path, area_v2: &str) -> Result<(), AppError> {
         let mut config = Self::from_file(path).unwrap_or_default();
         config.live.area_v2 = area_v2.to_string();
+        config.to_file(path)
+    }
+
+    #[cfg(feature = "cli")]
+    pub fn save_args(path: &std::path::Path, args: &str) -> Result<(), AppError> {
+        let mut config = Self::from_file(path).unwrap_or_default();
+        config.args = Some(args.to_string());
         config.to_file(path)
     }
 

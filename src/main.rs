@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        eprintln!("[ERROR] {}", e);
+        log!(error, "{}", e);
         #[cfg(windows)]
         let _ = std::process::Command::new("cmd").args(["/C", "pause"]).status();
         luci::set("running", false);
@@ -45,6 +45,12 @@ async fn run() -> Result<(), AppError> {
         pslinkb::cli::Args::parse()
     };
 
+    // ── 旧 --mode 弃用警告 ──
+    #[cfg(feature = "cli")]
+    if std::env::args().any(|a| a == "--mode") {
+        log!(warn, "--mode 已弃用,请使用 --live-mode");
+    }
+
     // ── 运行时调试日志开关 ──
     #[cfg(feature = "cli")]
     if args.debug {
@@ -61,7 +67,7 @@ async fn run() -> Result<(), AppError> {
 
     // ── 加载配置 ──
     #[cfg(feature = "cli")]
-    let (config, config_path, cli_cookie, created) = load_config(&args)?;
+    let (config, config_path, cli_cookie, _created) = load_config(&args)?;
     #[cfg(feature = "openwrt")]
     let (config, config_path) = load_config()?;
 
@@ -90,29 +96,49 @@ async fn run() -> Result<(), AppError> {
     #[cfg(feature = "openwrt")]
     luci::set("running", true);
 
+    // ── 首次运行模式选择 ──
+    #[cfg(feature = "cli")]
+    let mut config = config;
+    #[cfg(feature = "cli")]
+    if config.args.is_none() && args.proxy.is_none() && !args.windivert && !args.dns {
+        if let Some(args) = pslinkb::cli::select_mode() {
+            config.args = Some(args.clone());
+            if pslinkb::cli::confirm_save() {
+                match Config::save_args(&config_path, &args) {
+                    Ok(()) => eprintln!("args={} 已写入 pslinkb.toml", args),
+                    Err(e) => log!(warn, "写入 pslinkb.toml 失败 - {}", e),
+                }
+            }
+        }
+    }
+
     // ── 认证（放行 or exec 重启）──
     let (cookie_string, csrf) = ensure_cookie(&config_path, &config).await?;
 
     // ── DNS 重定向检测 ──
     let local_ip = pslinkb::utils::ip::local_ip();
 
+    #[cfg(feature = "cli")]
+    let launch = {
+        use pslinkb::cli::parse_args_string;
+        let mut l = config.args.as_deref()
+            .map(parse_args_string)
+            .unwrap_or_default();
+        l.merge_cli(args.proxy.clone(), args.windivert, args.dns);
+        l
+    };
+
     #[cfg(feature = "dns-redirect")]
-    let deferred;
-    #[cfg(feature = "dns-redirect")]
-    {
-        let dns_override = parse_dns_override(
-            #[cfg(feature = "cli")]
-            args.dns.as_deref(),
-        );
-        #[cfg(all(feature = "cli", windows))]
-        let proxy_url = config.proxy.as_deref();
-        deferred = pslinkb::dns::auto_start(
-            config.dns_proxy,
-            &local_ip,
-            dns_override,
-            #[cfg(all(feature = "cli", windows))]
-            proxy_url,
-        ).await;
+    let mut deferred = false;
+
+    // ── windivert 附加功能(仅 Windows,早启动)──
+    #[cfg(all(feature = "cli", feature = "dns-redirect"))]
+    let mut windivert_done: Option<tokio::sync::oneshot::Receiver<()>> = None;
+    #[cfg(all(feature = "cli", feature = "dns-redirect"))]
+    if launch.windivert {
+        deferred = true;
+        let local_ip_v4 = local_ip.parse().expect("Local IP must be a valid IPv4");
+        windivert_done = Some(pslinkb::dns::desktop::setup::start_windivert(local_ip_v4).await);
     }
 
     #[cfg(unix)]
@@ -134,9 +160,7 @@ async fn run() -> Result<(), AppError> {
         args.room_id,
         args.title.clone(),
         args.area.clone(),
-        args.mode.as_ref().and_then(|s| s.parse().ok()),
-        #[cfg(windows)]
-        args.proxy.clone(),
+        args.live_mode.as_ref().and_then(|s| s.parse().ok()),
         args.ffmpeg.clone(),
     );
 
@@ -147,16 +171,12 @@ async fn run() -> Result<(), AppError> {
             Ok(list) => {
                 if let Some(resolved) = biliapi::resolve_area_id(&list, &config.live.area_name) {
                     let resolved_str = resolved.to_string();
-                    if created {
-                        if let Err(_) = Config::save_area_v2(&config_path, &resolved_str) {
-                            log!(warn, "分区设置失败 - 请在 pslinkb.toml 设置分区 ID");
-                        } else {
-                            config.live.area_v2 = resolved_str.clone();
-                        }
-                    } else if config.live.area_v2 != resolved_str {
-                        log!(warn, "分区 {} 的 ID 已变为 {} - 如需修改 请在 pslinkb.toml 设置 area_v2 = \"{}\"",
-                            config.live.area_name, resolved_str, resolved_str);
+                    config.live.area_v2 = resolved_str.clone();
+                    if Config::save_area_v2(&config_path, &resolved_str).is_err() {
+                        log!(warn, "分区设置失败 - 请在 pslinkb.toml 设置分区 ID");
                     }
+                } else {
+                    log!(warn, "分区设置失败 - 请在 pslinkb.toml 设置分区 ID");
                 }
             }
             Err(_) => {
@@ -168,13 +188,12 @@ async fn run() -> Result<(), AppError> {
     #[cfg(feature = "openwrt")]
     {
         use pslinkb::core::biliapi;
-        if let Ok(list) = biliapi::get_area_list().await {
-            if let Some(resolved) = biliapi::resolve_area_id(&list, &config.live.area_name) {
-                let resolved_str = resolved.to_string();
-                if Config::save_area_v2(&resolved_str).is_ok() {
-                    config.live.area_v2 = resolved_str;
-                }
-            }
+        if let Ok(list) = biliapi::get_area_list().await
+            && let Some(resolved) = biliapi::resolve_area_id(&list, &config.live.area_name)
+        {
+            let resolved_str = resolved.to_string();
+            config.live.area_v2 = resolved_str.clone();
+            let _ = Config::save_area_v2(&resolved_str);
         }
     }
 
@@ -234,20 +253,64 @@ async fn run() -> Result<(), AppError> {
 
     let _ = irc_ready.await;
 
+    #[cfg(feature = "dns-redirect")]
+    {
+        #[cfg(all(feature = "cli", feature = "dns-redirect"))]
+        if let Some(purl) = launch.proxy.clone() {
+            eprintln!("[INFO] 启用 HTTP 代理 - {}", purl);
+            for domain in pslinkb::dns::PROXY_DOMAINS {
+                match pslinkb::dns::relay::check_proxy_connectivity(&purl, domain).await {
+                    Ok(()) => {
+                        eprintln!("[INFO] 代理连通性检查 - {} ✓", domain);
+                    }
+                    Err(e) => {
+                        log!(error, "代理连通性检查 - {} ✗ {}", domain, e);
+                        break;
+                    }
+                }
+            }
+            let purl_for_relay = purl.clone();
+            tokio::spawn(async move {
+                pslinkb::dns::relay::start(purl_for_relay).await;
+            });
+            eprintln!("[INFO] Relay started (0.0.0.0:443)");
+        }
+
+        #[cfg(all(feature = "cli", feature = "dns-redirect"))]
+        let skip = launch.windivert;
+        #[cfg(not(all(feature = "cli", feature = "dns-redirect")))]
+        let skip = false;
+
+        if !deferred && !skip {
+            deferred = pslinkb::dns::auto_start(
+                &local_ip,
+                #[cfg(feature = "cli")]
+                launch.proxy.as_deref(),
+                #[cfg(feature = "cli")]
+                launch.dns,
+                #[cfg(not(feature = "cli"))]
+                None,
+                #[cfg(not(feature = "cli"))]
+                false,
+            ).await;
+        }
+    }
+
     // ── 初始化完成 ──
     #[cfg(feature = "dns-redirect")]
     if !deferred {
         log!(ok, "{}", pslinkb::INIT_COMPLETE_MSG);
     }
+    #[cfg(all(feature = "cli", feature = "dns-redirect"))]
+    if let Some(rx) = windivert_done {
+        if rx.await.is_ok() {
+            log!(ok, "{}", pslinkb::INIT_COMPLETE_MSG);
+        } else {
+            log!(error, "WinDivert 启动失败");
+        }
+    }
     #[cfg(feature = "openwrt")]
     log!(ok, "{}", pslinkb::INIT_COMPLETE_MSG);
-
-    // ── Windows ──
-    #[cfg(all(feature = "cli", windows))]
-    {
-        log!(alert, "[WARN] 请将 PS5 的首选 DNS 设为本机 IP: {} - 备用 DNS 为 0.0.0.0", local_ip);
-        log!(alert, "[WARN] 若设置完成后此处未打印 PS5 连接日志 - 请在 https://urlynn.xyz 根据 #常见问题 自主排查");
-    }
 
     // ── 主事件循环 ──
     let ch = Channels { ffmpeg: ffmpeg_tx, bilibili: bilibili_tx, danmaku: danmaku_cmd_tx, irc_notify: irc_notify_tx };
@@ -293,9 +356,7 @@ fn load_config(args: &pslinkb::cli::Args) -> Result<(Config, std::path::PathBuf,
         args.room_id,
         args.title.clone(),
         args.area.clone(),
-        args.mode.as_ref().and_then(|s| s.parse().ok()),
-        #[cfg(windows)]
-        args.proxy.clone(),
+        args.live_mode.as_ref().and_then(|s| s.parse().ok()),
         args.ffmpeg.clone(),
     );
 
@@ -308,22 +369,4 @@ fn load_config() -> Result<(Config, std::path::PathBuf), AppError> {
     let config = Config::from_uci()?;
     let path = std::path::PathBuf::new();
     Ok((config, path))
-}
-
-// ────────────────────────────────────────────────────────────
-// DNS override 解析
-// ────────────────────────────────────────────────────────────
-
-#[cfg(feature = "dns-redirect")]
-fn parse_dns_override(dns: Option<&str>) -> Option<std::net::SocketAddr> {
-    use std::net::{Ipv4Addr, SocketAddr, IpAddr};
-    let input = dns?;
-    if let Some((ip_part, port_part)) = input.split_once(':') {
-        let ip: Ipv4Addr = ip_part.parse().ok()?;
-        let port: u16 = port_part.parse().ok()?;
-        Some(SocketAddr::new(IpAddr::V4(ip), port))
-    } else {
-        let ip: Ipv4Addr = input.parse().ok()?;
-        Some(SocketAddr::new(IpAddr::V4(ip), 53))
-    }
 }

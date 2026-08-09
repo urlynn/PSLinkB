@@ -116,7 +116,7 @@ fn get_timestamp() -> u64 {
 
 fn sign_query(params: &BTreeMap<String, String>, appsec: &str) -> String {
     let query: String = params.iter()
-        .map(|(k, v)| format!("{}={}", k, v))
+        .map(|(k, v)| format!("{}={}", k, url_encode(v)))
         .collect::<Vec<_>>()
         .join("&");
     format!("{:x}", md5::compute(format!("{}{}", query, appsec).as_bytes()))
@@ -128,7 +128,7 @@ fn build_signed(mut params: BTreeMap<String, String>, appkey: &str, appsec: &str
     let sign = sign_query(&params, appsec);
     params.insert("sign".to_string(), sign);
     params.iter()
-        .map(|(k, v)| format!("{}={}", k, v))
+        .map(|(k, v)| format!("{}={}", k, url_encode(v)))
         .collect::<Vec<_>>()
         .join("&")
 }
@@ -235,14 +235,11 @@ pub async fn get_area_list() -> Result<Vec<AreaParent>, AppError> {
 
 /// 查找子分区 id
 pub fn resolve_area_id(list: &[AreaParent], target: &str) -> Option<String> {
-    for parent in list {
-        for child in &parent.list {
-            if child.name == target {
-                return Some(child.id.clone());
-            }
-        }
-    }
-    None
+    let target = if target.trim().is_empty() { "主机游戏" } else { target };
+    let find = |name: &str| {
+        list.iter().find_map(|p| p.list.iter().find(|c| c.name == name).map(|c| c.id.clone()))
+    };
+    find(target).or_else(|| find("主机游戏"))
 }
 
 // ————————————————————————————————————————————————————————————
@@ -381,7 +378,7 @@ fn parse_start_response(body: &str, uid: Option<&str>) -> Result<StartLiveResult
 /// Electron 开播
 pub async fn start_live_electron(
     client: &reqwest::Client, cookie_str: &str, csrf: &str, uid: Option<&str>,
-    room_id: u64, area_v2: &str, title: Option<&str>,
+    room_id: u64, area_v2: &str,
 ) -> Result<StartLiveResult, AppError> {
     let mut params = BTreeMap::new();
     params.insert("room_id".to_string(), room_id.to_string());
@@ -390,7 +387,6 @@ pub async fn start_live_electron(
     params.insert("csrf".to_string(), csrf.to_string());
     params.insert("ts".to_string(), get_timestamp().to_string());
     params.insert("build".to_string(), ELECTRON_BUILD.to_string());
-    if let Some(t) = title && !t.is_empty() { params.insert("title".to_string(), t.to_string()); }
     let body = build_signed(params, ELECTRON_KEY, ELECTRON_SEC);
 
     let response = common_headers(
@@ -409,7 +405,7 @@ pub async fn start_live_electron(
 /// 直播姬开播
 pub async fn start_live_livehime(
     client: &reqwest::Client, cookie_str: &str, csrf: &str, uid: Option<&str>,
-    room_id: u64, area_v2: &str, title: Option<&str>,
+    room_id: u64, area_v2: &str,
 ) -> Result<StartLiveResult, AppError> {
     let (version, build) = get_live_version(client).await?;
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -423,7 +419,6 @@ pub async fn start_live_livehime(
     params.insert("csrf".to_string(), csrf.to_string());
     params.insert("csrf_token".to_string(), csrf.to_string());
     params.insert("room_id".to_string(), room_id.to_string());
-    if let Some(t) = title && !t.is_empty() { params.insert("title".to_string(), t.to_string()); }
     let body = build_signed(params, LIVEHIME_KEY, LIVEHIME_SEC);
 
     let response = common_headers(

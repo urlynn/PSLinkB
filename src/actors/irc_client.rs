@@ -37,7 +37,9 @@ impl IrcClientWorker {
                 if !name.is_empty() {
                     break name;
                 }
-                self.state_rx.changed().await.map_err(|_| AppError::General("state channel closed".into()))?;
+                if self.state_rx.changed().await.is_err() {
+                    return Ok(());
+                }
             };
 
             // 连接 IRC Server

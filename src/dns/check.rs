@@ -10,8 +10,6 @@ mod dns_redirect_imports {
 
 #[cfg(feature = "dns-redirect")]
 use std::time::Duration;
-#[cfg(all(feature = "dns-redirect", not(windows)))]
-use owo_colors::{OwoColorize, Stream};
 
 pub const REDIRECT_DOMAINS: &[&str] = &[
     "global-contribute.live-video.net",
@@ -144,20 +142,9 @@ where
         let ip = resolve_fn(domain.to_string()).await.unwrap_or_else(|| "无解析".into());
 
         if ip == expected_ip {
-            #[cfg(not(windows))]
-            {
-                let ip_colored = ip.if_supports_color(Stream::Stderr, |s| s.green());
-                let check = "✓".if_supports_color(Stream::Stderr, |s| s.green());
-                eprintln!("[System] DNS Check - {} -> {} {}", domain, ip_colored, check);
-            }
             results.push(CheckResult { domain: domain.to_string(), expected: expected_ip.to_string(), actual: Some(ip), success: true });
         } else {
-            #[cfg(not(windows))]
-            {
-                let ip_colored = ip.if_supports_color(Stream::Stderr, |s| s.red());
-                let cross = "✗".if_supports_color(Stream::Stderr, |s| s.red());
-                eprintln!("[System] DNS Check - {} -> {} {}", domain, ip_colored, cross);
-            }
+            crate::log!(warn, "DNS Check - ✗ {} {}", domain, ip);
             results.push(CheckResult { domain: domain.to_string(), expected: expected_ip.to_string(), actual: Some(ip), success: false });
         }
     }

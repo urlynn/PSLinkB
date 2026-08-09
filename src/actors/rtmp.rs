@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::core::error::AppError;
+use crate::log;
 use tokio::sync::{mpsc, Mutex};
 
 /// 流事件类型
@@ -175,7 +176,7 @@ impl RtmpHandler for RtmpHandlerImpl {
         async move {
             if !is_ps5 { return; }
             if handler.current_stream.lock().await.take().is_none() { return; }
-            eprintln!("[WARN] {} - {} - Abnormal disconnect -> Cleanup", flash_ver, addr);
+            log!(warn, "{} - {} - Abnormal disconnect -> Cleanup", flash_ver, addr);
             let event = StreamEvent {
                 app: String::new(),
                 stream_key: String::new(),
