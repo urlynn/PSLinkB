@@ -1,6 +1,7 @@
 'use strict';
 'require view';
 'require rpc';
+'require poll';
 'require ui';
 'require uqr';
 
@@ -103,26 +104,22 @@ var T = {};
 			curQr = url;
 		}
 
-		if (curQr) draw(curQr);
-		
-		// uhttpd-mod-ubus notify: event=event.trigger, data={type:"pslinkb",data:{key,value}}
-		var es = new EventSource('/ubus/subscribe/service');
-		es.addEventListener('event.trigger', function(e) {
-			try {
-				var msg = JSON.parse(e.data);
-				if (msg.type !== 'pslinkb') return;
-				var data = msg.data;
-				if (data.key === 'qr') {
-					var qr = data.value || {};
+		if (curQr && box && titleEl) {
+			draw(curQr);
+			var refreshQr = function() {
+				return callInitial().then(function(state) {
+					var qr = (state && state.qr) || {};
 					if (qr.url && qr.url !== curQr) draw(qr.url);
-					if (qr.status === 'scanned' && titleEl) titleEl.textContent = T.SCANNED;
-					if (qr.status === 'done') {
+					if (qr.status === 'scanned') titleEl.textContent = T.SCANNED;
+					if (qr.status === 'done' || (!isLoggedIn && state && state.user && !qr.url)) {
+						poll.remove(refreshQr);
 						titleEl.textContent = isLoggedIn ? T.FACE_DONE : T.DONE;
 						setTimeout(function() { location.href = statusUrl; }, 1000);
 					}
-				}
-			} catch(_) {}
-		});
+				}).catch(function() {});
+			};
+			poll.add(refreshQr, 2);
+		}
 
 		return E([]);
 	}

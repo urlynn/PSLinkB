@@ -113,7 +113,8 @@ function detect_arch() {
 	const da = m[1];
 	if (da == 'x86_64') return { arch: 'x86_64', method: 'pkg' };
 	if (da == 'aarch64_generic') return { arch: 'aarch64', method: 'pkg' };
-	if (da == 'aarch64_cortex-a53' || da == 'aarch64_cortex-a72' || da == 'aarch64_cortex-a76')
+	if (da == 'aarch64_cortex-a53') return { arch: 'aarch64', method: 'targz', ipk_arch: da };
+	if (da == 'aarch64_cortex-a72' || da == 'aarch64_cortex-a76')
 		return { arch: 'aarch64', method: 'targz' };
 	return { arch: '', method: '' };
 }
@@ -274,7 +275,17 @@ const methods = {
 
 			let asset_url = '';
 			const assets = rel.assets || [];
-			for (let i = 0; i < length(assets); i++) {
+			if (type == 'pslinkb' && pt == 'opkg' && archInfo.ipk_arch) {
+				const expected = 'pslinkb-' + ver + '-openwrt-' + archInfo.ipk_arch + '.ipk';
+				for (let i = 0; i < length(assets); i++) {
+					if (assets[i].name == expected && assets[i].browser_download_url) {
+						asset_url = assets[i].browser_download_url;
+						target_ext = 'ipk';
+						break;
+					}
+				}
+			}
+			for (let i = 0; !asset_url && i < length(assets); i++) {
 				const name = assets[i].name || '';
 				const url = assets[i].browser_download_url;
 				if (!url) continue;

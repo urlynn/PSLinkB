@@ -153,7 +153,13 @@ main() {
 	if [ "$pm" = "apk" ]; then ext=apk; else ext=ipk; fi
 
 	info "=== 安装 pslinkb ==="
-	if [ "$METHOD" = "targz" ]; then
+	pslinkb_url=""
+	if [ "$pm" = "opkg" ] && [ "$DISTRIB_ARCH_VAL" = "aarch64_cortex-a53" ]; then
+		pslinkb_url=$(printf '%s\n' "$urls" | awk -F / -v asset="pslinkb-${ver}-openwrt-aarch64_cortex-a53.ipk" '$NF == asset {print; exit}')
+	fi
+	if [ -n "$pslinkb_url" ]; then
+		install_pslinkb_pkg "$pslinkb_url" "$pm"
+	elif [ "$METHOD" = "targz" ]; then
 		pslinkb_url=$(echo "$urls" | grep "pslinkb-${ver}-openwrt-aarch64\.tar\.gz$" | head -1)
 		[ -z "$pslinkb_url" ] && die "未找到 pslinkb tar.gz: pslinkb-${ver}-openwrt-aarch64.tar.gz"
 		install_pslinkb_targz "$pslinkb_url"
