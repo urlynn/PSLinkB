@@ -416,7 +416,7 @@ jobs:
           gh release download ${{ inputs.deps-tag || 'build-deps' }} --repo ${{ github.repository }} \
             -p 'openwrt-packer.tar.gz' -D /tmp/ --clobber
           tar xf /tmp/openwrt-packer.tar.gz -C ./
-      - name: Download binaries (both archs + gracemont)
+      - name: Download OpenWrt binaries
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -426,7 +426,7 @@ jobs:
               -p "pslinkb-${arch}-openwrt" -D /tmp/bins --clobber
           done
           gh release download ${{ inputs.deps-tag || 'build-deps' }} --repo ${{ github.repository }} \
-            -p "pslinkb-x86_64-gracemont-openwrt" -D /tmp/bins --clobber
+            -p "pslinkb-x86_64-gracemont-openwrt" -p "pslinkb-aarch64-cortex-a53-openwrt" -D /tmp/bins --clobber
       - name: Download deps (pslinkb-stream)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -460,6 +460,16 @@ jobs:
         run: |
           set -e; V="${V#v}"
           ./openwrt-packer/pack.sh --arch x86_64,aarch64 --version "$V" --bin-dir /tmp/bin --out /tmp/out openwrt/pslinkb
+      - name: Package Cortex-A53 IPK
+        run: |
+          set -e
+          arch=aarch64_cortex-a53
+          install -d "/tmp/bin/$arch" /tmp/cortex-a53-package/root/CONTROL
+          install -m 755 /tmp/bins/pslinkb-aarch64-cortex-a53-openwrt "/tmp/bin/$arch/pslinkb"
+          install -m 755 /tmp/bin/aarch64/pslinkb-stream "/tmp/bin/$arch/pslinkb-stream"
+          cp -a openwrt/pslinkb/. /tmp/cortex-a53-package/
+          printf '/etc/config/pslinkb\n' > /tmp/cortex-a53-package/root/CONTROL/conffiles
+          ./openwrt-packer/pack.sh --format ipk --arch "$arch" --version "${V#v}" --bin-dir /tmp/bin --out /tmp/out /tmp/cortex-a53-package
       - name: Package luci-app-pslinkb (uhttpd + nginx variants)
         run: |
           set -e; V="${V#v}"
@@ -661,6 +671,17 @@ jobs:
         run: |
           sudo chroot /tmp/openwrt-ipk-root /usr/bin/pslinkb --version && echo "IPK OK (aarch64)"
           echo "=== pkg info ===" && sudo chroot /tmp/openwrt-ipk-root /bin/opkg status pslinkb
+      - name: Verify Cortex-A53 IPK
+        run: |
+          set -e
+          shopt -s nullglob
+          ipk=(/tmp/pkgs/pslinkb-*-openwrt-aarch64_cortex-a53.ipk)
+          test "${#ipk[@]}" -eq 1
+          sudo cp "${ipk[0]}" /tmp/openwrt-ipk-root/tmp/cortex-a53.ipk
+          sudo chroot /tmp/openwrt-ipk-root /bin/opkg --add-arch aarch64_cortex-a53:200 install --force-reinstall /tmp/cortex-a53.ipk
+          sudo chroot /tmp/openwrt-ipk-root /bin/opkg status pslinkb | grep -Fx 'Architecture: aarch64_cortex-a53'
+          sudo chroot /tmp/openwrt-ipk-root /usr/bin/pslinkb --version
+          sudo chroot /tmp/openwrt-ipk-root /usr/bin/pslinkb-stream --version
       - name: Verify luci IPK
         run: |
           set -e

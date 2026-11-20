@@ -4,8 +4,7 @@
 		"read": {
 			"uci": [ "pslinkb" ],
 			"ubus": {
-				"luci.pslinkb": [ "log_read", "status_initial", "app_info", "check_updates", "install_package", "svc_status" ],
-				"service": [ "*" ]
+				"luci.pslinkb": [ "log_read", "status_initial", "app_info", "check_updates", "svc_status" ]
 			}
 		},
 		"write": {

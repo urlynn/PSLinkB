@@ -31,7 +31,14 @@ apk add --allow-untrusted pslinkb-0.3.3-{arch}-openwrt.apk
 opkg update
 opkg install pslinkb-0.3.3-{arch}-openwrt.ipk
 ```
-**aarch64_cortex-a53 / aarch64_cortex-a72 / aarch64_cortex-a76**
+**aarch64_cortex-a53（opkg，例如小米 BE10000 的 QWRT）**
+
+```shell
+opkg install pslinkb-{version}-openwrt-aarch64_cortex-a53.ipk
+opkg install luci-app-pslinkb-{luci-version}-uhttpd.ipk
+```
+
+**aarch64_cortex-a53（apk 或没有专用 IPK 的旧版本） / aarch64_cortex-a72 / aarch64_cortex-a76**
 
 ```shell
 tar xzf pslinkb-0.3.3-aarch64-openwrt.tar.gz -C /

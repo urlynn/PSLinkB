@@ -1,6 +1,7 @@
 'use strict';
 'require view';
 'require rpc';
+'require poll';
 'require ui';
 'require uci';
 
@@ -191,15 +192,16 @@ return view.extend({
 
 		self._updateSvc(d.state || {}, d.mode || 'auto');
 
-		// uhttpd-mod-ubus notify: event=event.trigger, data={type:"pslinkb",data:{key,value}}
-		var es = new EventSource('/ubus/subscribe/service');
-		es.addEventListener('event.trigger', function(e) {
-			try {
-				var msg = JSON.parse(e.data);
-				if (msg.type !== 'pslinkb') return;
-				self._applyPush(msg.data);
-			} catch(_) {}
-		});
+		poll.add(function() {
+			return callInitial().then(function(state) {
+				if (!state || typeof state.running !== 'boolean') return;
+				if (state.running !== (d.state || {}).running ||
+				    (self._svcManual && Date.now() - self._svcManual >= 5000)) self._svcManual = null;
+				d.state = state;
+				self._updateSvc(state, d.mode || 'auto');
+				self._updateDns(state.dns || { enabled: false });
+			}).catch(function() {});
+		}, 2);
 
 		// 本地版本
 		var info = (window._pslinkbData || {}).info || {};
@@ -569,7 +571,6 @@ return view.extend({
 			var svcEl = document.querySelector('.js-svc');
 			if (svcEl) { svcEl.classList.remove('stopped'); svcEl.classList.add('waiting'); }
 			(on ? callSvcStart : callSvcStop)().then(function() {
-			//SSE running 到达时由 _applyPush 清空
 			inp.disabled = false;
 			self._confirmSvcAfter(on ? 5000 : 0);
 		}).catch(function() {
@@ -704,32 +705,6 @@ return view.extend({
 		return '';
 	},
 
-	_applyPush: function(data) {
-		var d = window._pslinkbData || {};
-		var state = d.state || {};
-		var mode = d.mode || 'auto';
-
-		if (data.key === 'live') {
-			state.live = data.value || {};
-			this._updateSvc(state, mode);
-		} else if (data.key === 'qr') {
-			state.qr = data.value || {};
-			this._updateSvc(state, mode);
-		} else if (data.key === 'user') {
-			state.user = data.value || '';
-			this._updateSvc(state, mode);
-		} else if (data.key === 'error') {
-			state.error = data.value || '';
-			this._updateSvc(state, mode);
-		} else if (data.key === 'running') {
-			state.running = data.value;
-			this._svcManual = null;
-			this._updateSvc(state, mode);
-		} else if (data.key === 'dns') {
-			state.dns = data.value || {};
-			this._updateDns(state.dns);
-		}
-	},
 	_updateDns: function(d) {
 		var pill = document.querySelector('.js-dns-pill');
 		var pillManual = this._dnsManual && Date.now() - this._dnsManual < 800;

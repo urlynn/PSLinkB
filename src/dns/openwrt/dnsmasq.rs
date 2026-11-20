@@ -30,6 +30,8 @@ fn write_conf(confdir: &str, domains: &[&str], target_ip: &str) -> bool {
     let mut content = String::new();
     for domain in domains {
         content.push_str(&format!("address=/{}/{}\n", domain, target_ip));
+        // dnsmasq 2.86+ otherwise forwards record types that the address cannot answer.
+        content.push_str(&format!("local=/{}/\n", domain));
     }
     std::fs::write(&conf_path, &content).is_ok()
 }
@@ -44,6 +46,7 @@ fn restart_dnsmasq() -> bool {
 
 pub fn enable_redirect(domains: &[&str], target_ip: &str) -> Option<String> {
     let confdir = ensure_confdir()?;
+    std::fs::create_dir_all(&confdir).ok()?;
     if !write_conf(&confdir, domains, target_ip) { return None; }
     if !restart_dnsmasq() { return None; }
     Some(confdir)
